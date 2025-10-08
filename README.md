@@ -33,9 +33,11 @@ npm run build
 
 ## 🚀 Usage
 
-### Configure Claude Desktop
+### Configure MCP Client
 
-Add to your Claude Desktop configuration file (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+This is a standard MCP server that can be used with any MCP client. Configure it in your MCP client's configuration file.
+
+**Example configuration:**
 
 ```json
 {
@@ -287,7 +289,7 @@ Tasks are stored in a JSON file at:
 ## 🔌 Integration with Other MCP Servers
 
 Schedule Task MCP can trigger tools from other MCP servers. Simply specify:
-- `mcp_server`: The name of the MCP server (as configured in Claude Desktop)
+- `mcp_server`: The name of the MCP server (as configured in your MCP client)
 - `mcp_tool`: The tool name to call
 - `mcp_arguments`: Arguments to pass
 
@@ -321,5 +323,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## 📚 Related Projects
 
-- [Claude Desktop](https://claude.ai/download) - Anthropic Claude desktop application
+- [Model Context Protocol](https://modelcontextprotocol.io/) - Official MCP documentation
 - [MCP Servers](https://github.com/modelcontextprotocol/servers) - Official MCP server implementations
+- [MCP Clients](https://github.com/modelcontextprotocol) - Various MCP client implementations
