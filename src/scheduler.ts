@@ -3,19 +3,198 @@
  */
 
 import * as cron from 'node-cron';
-import { TaskStorage, TaskRecord } from './storage.js';
+import cronParser from 'cron-parser';
+import { TaskStorage, TaskRecord, TaskStatus, TaskHistoryEntry } from './storage.js';
+import { CreateMessageResultSchema } from '@modelcontextprotocol/sdk/types.js';
+import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { formatInTimezone, getSystemTimeZone } from './format.js';
+
+const HISTORY_LIMIT = 10;
+
+interface IntervalTriggerConfig {
+  seconds?: number;
+  minutes?: number;
+  hours?: number;
+  days?: number;
+}
 
 export interface SchedulerConfig {
   dbPath: string;
+  mcpServer?: Server;  // 🎯 MCP server used to send sampling requests
 }
 
 export class TaskScheduler {
   private storage: TaskStorage;
   private cronJobs: Map<string, cron.ScheduledTask> = new Map();
   private intervalTimers: Map<string, NodeJS.Timeout> = new Map();
+  private mcpServer?: Server;
+
+  private readonly timeZone: string;
 
   constructor(config: SchedulerConfig) {
     this.storage = new TaskStorage(config.dbPath);
+    this.mcpServer = config.mcpServer;
+    this.timeZone = process.env.SCHEDULE_TASK_TIMEZONE || getSystemTimeZone();
+  }
+
+  private computeIntervalMs(config: IntervalTriggerConfig): number {
+    let intervalMs = 0;
+    if (config.seconds) intervalMs += config.seconds * 1000;
+    if (config.minutes) intervalMs += config.minutes * 60 * 1000;
+    if (config.hours) intervalMs += config.hours * 60 * 60 * 1000;
+    if (config.days) intervalMs += config.days * 24 * 60 * 60 * 1000;
+    return intervalMs;
+  }
+
+  private computeNextRun(task: TaskRecord, fromDate: Date = new Date()): string | undefined {
+    if (!task.enabled || task.status === 'completed') {
+      return task.next_run;
+    }
+
+    if (task.trigger_type === 'interval') {
+      if (task.next_run) {
+        const existing = new Date(task.next_run);
+        if (existing > fromDate) {
+          return existing.toISOString();
+        }
+      }
+      const intervalMs = this.computeIntervalMs(task.trigger_config as IntervalTriggerConfig);
+      if (intervalMs <= 0) {
+        return undefined;
+      }
+      return new Date(fromDate.getTime() + intervalMs).toISOString();
+    }
+
+    if (task.trigger_type === 'cron') {
+      if (task.next_run) {
+        const existing = new Date(task.next_run);
+        if (existing > fromDate) {
+          return existing.toISOString();
+        }
+      }
+      try {
+        const interval = cronParser.parseExpression(task.trigger_config.expression, {
+          currentDate: fromDate,
+          tz: this.timeZone,
+        });
+        const nextDate = interval.next().toDate();
+        return nextDate.toISOString();
+      } catch (error) {
+        console.error(`[${task.id}] Failed to compute cron next run:`, error);
+        return undefined;
+      }
+    }
+
+    if (task.trigger_type === 'date') {
+      const runDate = new Date(task.trigger_config.run_date);
+      if (runDate <= fromDate) {
+        return undefined;
+      }
+      return runDate.toISOString();
+    }
+
+    return undefined;
+  }
+
+  private getTriggerSummary(task: TaskRecord): string {
+    switch (task.trigger_type) {
+      case 'interval': {
+        const parts: string[] = [];
+        const config = task.trigger_config as IntervalTriggerConfig;
+        if (config.days) parts.push(`${config.days}天`);
+        if (config.hours) parts.push(`${config.hours}小时`);
+        if (config.minutes) parts.push(`${config.minutes}分钟`);
+        if (config.seconds) parts.push(`${config.seconds}秒`);
+        return parts.length ? `每${parts.join('')}` : '间隔任务（未配置）';
+      }
+      case 'cron':
+        return `Cron: ${task.trigger_config.expression}`;
+      case 'date':
+        return `一次性 @ ${task.trigger_config.run_date}`;
+      default:
+        return task.trigger_type;
+    }
+  }
+
+  private appendHistory(task: TaskRecord, entry: TaskHistoryEntry): void {
+    if (!task.history) {
+      task.history = [];
+    }
+    task.history.unshift(entry);
+    if (task.history.length > HISTORY_LIMIT) {
+      task.history = task.history.slice(0, HISTORY_LIMIT);
+    }
+  }
+
+  private determineStatus(task: TaskRecord, now: Date = new Date()): TaskStatus {
+    if (!task.enabled) {
+      return task.status === 'completed' ? 'completed' : 'paused';
+    }
+
+    if (task.status === 'running') {
+      return 'running';
+    }
+
+    if (task.trigger_type === 'date') {
+      const runDate = new Date(task.trigger_config.run_date);
+      if (task.history && task.history[0]?.status === 'success') {
+        return 'completed';
+      }
+      if (runDate <= now) {
+        return 'completed';
+      }
+      return 'scheduled';
+    }
+
+    if (task.last_status === 'error') {
+      return 'error';
+    }
+
+    return 'scheduled';
+  }
+
+  private normaliseTask(task: TaskRecord): TaskRecord {
+    const now = new Date();
+    if (task.history && task.history.length > HISTORY_LIMIT) {
+      task.history = task.history.slice(0, HISTORY_LIMIT);
+    }
+    task.status = this.determineStatus(task, now);
+
+    if (task.trigger_type === 'date' && task.status === 'completed') {
+      task.enabled = false;
+    }
+
+    task.next_run = this.computeNextRun(task, now);
+    task.updated_at = task.updated_at || new Date().toISOString();
+    return task;
+  }
+
+  public describeTask(task: TaskRecord): TaskRecord & {
+    trigger_summary: string;
+    next_run_local?: string;
+    last_run_local?: string;
+    created_at_local?: string;
+    updated_at_local?: string;
+    history?: Array<TaskHistoryEntry & { run_at_local?: string }>;
+  } {
+    const createdAtLocal = formatInTimezone(task.created_at, this.timeZone, task.created_at);
+    const updatedAtLocal = formatInTimezone(task.updated_at, this.timeZone, task.updated_at);
+    const nextRunLocal = task.next_run ? formatInTimezone(task.next_run, this.timeZone, task.next_run) : undefined;
+    const lastRunLocal = task.last_run ? formatInTimezone(task.last_run, this.timeZone, task.last_run) : undefined;
+    const historyWithLocal = task.history?.map((entry) => ({
+      ...entry,
+      run_at_local: formatInTimezone(entry.run_at, this.timeZone, entry.run_at),
+    }));
+
+    return {
+      ...task,
+      history: historyWithLocal,
+      trigger_summary: this.getTriggerSummary(task),
+      next_run_local: nextRunLocal,
+      last_run_local: lastRunLocal,
+      created_at_local: createdAtLocal,
+      updated_at_local: updatedAtLocal,
+    };
   }
 
   /**
@@ -24,8 +203,10 @@ export class TaskScheduler {
   async initialize(): Promise<void> {
     const tasks = this.storage.list();
     for (const task of tasks) {
-      if (task.enabled) {
-        await this.scheduleTask(task);
+      const normalised = this.normaliseTask(task);
+      this.storage.upsert(normalised);
+      if (normalised.enabled && normalised.status !== 'completed') {
+        await this.scheduleTask(normalised);
       }
     }
   }
@@ -40,6 +221,7 @@ export class TaskScheduler {
     mcp_server?: string;
     mcp_tool?: string;
     mcp_arguments?: Record<string, any>;
+    agent_prompt?: string;  // 🎯 New: Agent prompt for sampling
   }): Promise<TaskRecord> {
     const now = new Date().toISOString();
     const task: TaskRecord = {
@@ -50,13 +232,21 @@ export class TaskScheduler {
       mcp_server: params.mcp_server,
       mcp_tool: params.mcp_tool,
       mcp_arguments: params.mcp_arguments,
+      agent_prompt: params.agent_prompt,  // 🎯 Store agent prompt
       enabled: true,
+      status: 'scheduled',
       created_at: now,
       updated_at: now,
+      history: [],
     };
 
+    task.next_run = this.computeNextRun(task);
+
     this.storage.upsert(task);
-    await this.scheduleTask(task);
+
+    if (task.enabled) {
+      await this.scheduleTask(task);
+    }
 
     return task;
   }
@@ -65,14 +255,27 @@ export class TaskScheduler {
    * List all tasks
    */
   listTasks(): TaskRecord[] {
-    return this.storage.list();
+    const tasks = this.storage.list();
+    const normalised: TaskRecord[] = [];
+    for (const task of tasks) {
+      const updated = this.normaliseTask({ ...task });
+      this.storage.upsert(updated);
+      normalised.push(updated);
+    }
+    return normalised;
   }
 
   /**
    * Get a specific task
    */
   getTask(id: string): TaskRecord | undefined {
-    return this.storage.get(id);
+    const task = this.storage.get(id);
+    if (!task) {
+      return undefined;
+    }
+    const updated = this.normaliseTask({ ...task });
+    this.storage.upsert(updated);
+    return updated;
   }
 
   /**
@@ -80,7 +283,7 @@ export class TaskScheduler {
    */
   async updateTask(
     id: string,
-    updates: Partial<Pick<TaskRecord, 'name' | 'trigger_type' | 'trigger_config' | 'mcp_server' | 'mcp_tool' | 'mcp_arguments' | 'enabled'>>
+    updates: Partial<Pick<TaskRecord, 'name' | 'trigger_type' | 'trigger_config' | 'mcp_server' | 'mcp_tool' | 'mcp_arguments' | 'agent_prompt' | 'enabled'>>
   ): Promise<TaskRecord> {
     const task = this.storage.get(id);
     if (!task) {
@@ -90,11 +293,14 @@ export class TaskScheduler {
     Object.assign(task, updates);
     task.updated_at = new Date().toISOString();
 
+    task.status = this.determineStatus(task);
+    task.next_run = this.computeNextRun(task);
+
     this.storage.upsert(task);
 
     // Reschedule if needed
     this.unscheduleTask(id);
-    if (task.enabled) {
+    if (task.enabled && task.status !== 'completed') {
       await this.scheduleTask(task);
     }
 
@@ -107,6 +313,21 @@ export class TaskScheduler {
   async deleteTask(id: string): Promise<boolean> {
     this.unscheduleTask(id);
     return this.storage.delete(id);
+  }
+
+  async clearTaskHistory(id: string): Promise<TaskRecord> {
+    const task = this.storage.get(id);
+    if (!task) {
+      throw new Error(`Task not found: ${id}`);
+    }
+
+    task.history = [];
+    task.last_message = undefined;
+    task.last_status = undefined;
+    task.updated_at = new Date().toISOString();
+    this.storage.upsert(task);
+
+    return task;
   }
 
   /**
@@ -152,27 +373,26 @@ export class TaskScheduler {
    * Schedule interval-based task
    */
   private scheduleInterval(task: TaskRecord): void {
-    const { minutes, hours, days } = task.trigger_config;
-    let intervalMs = 0;
+    const intervalMs = this.computeIntervalMs(task.trigger_config as IntervalTriggerConfig);
 
-    if (minutes) intervalMs += minutes * 60 * 1000;
-    if (hours) intervalMs += hours * 60 * 60 * 1000;
-    if (days) intervalMs += days * 24 * 60 * 60 * 1000;
-
-    if (intervalMs === 0) {
+    if (intervalMs <= 0) {
       console.error(`Invalid interval configuration for task ${task.id}`);
       return;
     }
 
+    const normalizedInterval = Math.max(1, Math.round(intervalMs));
+
     const timer = setInterval(async () => {
       await this.runTask(task);
-    }, intervalMs);
+    }, normalizedInterval);
 
     this.intervalTimers.set(task.id, timer);
 
     // Calculate next run time
-    const nextRun = new Date(Date.now() + intervalMs).toISOString();
-    this.storage.updateStatus(task.id, { next_run: nextRun });
+    const nextRun = new Date(Date.now() + normalizedInterval).toISOString();
+    task.next_run = nextRun;
+    task.updated_at = new Date().toISOString();
+    this.storage.upsert(task);
   }
 
   /**
@@ -188,13 +408,18 @@ export class TaskScheduler {
 
     const cronJob = cron.schedule(expression, async () => {
       await this.runTask(task);
+    }, {
+      timezone: this.timeZone,
     });
 
     this.cronJobs.set(task.id, cronJob);
 
-    // Note: cron library doesn't provide next run time easily
-    // This is a simplified approach
-    this.storage.updateStatus(task.id, { next_run: 'Scheduled (cron)' });
+    const nextRun = this.computeNextRun(task);
+    if (nextRun) {
+      task.next_run = nextRun;
+      task.updated_at = new Date().toISOString();
+      this.storage.upsert(task);
+    }
   }
 
   /**
@@ -212,13 +437,14 @@ export class TaskScheduler {
     const delay = runDate.getTime() - now.getTime();
 
     const timer = setTimeout(async () => {
+      this.intervalTimers.delete(task.id);
       await this.runTask(task);
-      // Disable after one-time execution
-      await this.pauseTask(task.id);
     }, delay);
 
     this.intervalTimers.set(task.id, timer);
-    this.storage.updateStatus(task.id, { next_run: runDate.toISOString() });
+    task.next_run = runDate.toISOString();
+    task.updated_at = new Date().toISOString();
+    this.storage.upsert(task);
   }
 
   /**
@@ -243,43 +469,102 @@ export class TaskScheduler {
    * Run a task
    */
   private async runTask(task: TaskRecord): Promise<{ success: boolean; message: string }> {
-    const startTime = new Date().toISOString();
+    const start = new Date();
+    const startIso = start.toISOString();
 
-    this.storage.updateStatus(task.id, {
-      last_run: startTime,
-      last_status: 'running',
-      last_message: undefined,
-    });
+    task.status = 'running';
+    task.last_run = startIso;
+    task.last_status = 'running';
+    task.last_message = undefined;
+    task.updated_at = startIso;
+    this.storage.upsert(task);
 
     try {
-      // In a real implementation, this would call the MCP tool
-      // For now, we just simulate success
-      const message = `Task executed: ${task.name}`;
-      if (task.mcp_server && task.mcp_tool) {
-        console.log(`[${task.id}] Would call ${task.mcp_server}.${task.mcp_tool} with args:`, task.mcp_arguments);
+      let message: string;
+
+      // 🎯 New: Use MCP Sampling if agent_prompt is provided
+      if (task.agent_prompt) {
+        if (this.mcpServer) {
+          console.error(`[${task.id}] Executing via MCP Sampling: "${task.agent_prompt}"`);
+
+          const response = await this.mcpServer.request(
+            {
+              method: 'sampling/createMessage',
+              params: {
+                messages: [{
+                  role: 'user',
+                  content: {
+                    type: 'text',
+                    text: task.agent_prompt
+                  }
+                }],
+                includeContext: 'allServers',
+                maxTokens: 2000
+              }
+            },
+            CreateMessageResultSchema
+          );
+
+          const content = (response as any).content?.text || JSON.stringify(response);
+          message = `Sampling response: ${content}`;
+          console.error(`[${task.id}] Sampling completed: ${content.substring(0, 200)}...`);
+        } else {
+          message = 'Task configured with agent_prompt but MCP server is not ready to send sampling requests';
+          console.error(`[${task.id}] ${message}`);
+        }
+
+      } else if (task.mcp_server && task.mcp_tool) {
+        // Legacy: Log MCP tool call (but don't actually call it - servers can't call each other)
+        message = `Task configured (legacy): ${task.mcp_server}.${task.mcp_tool}`;
+        console.error(`[${task.id}] ${message} - Note: MCP servers cannot directly call other servers. Consider using agent_prompt with sampling instead.`);
+
+      } else {
+        // No action configured
+        message = `Task executed: ${task.name} (no action configured)`;
+        console.error(`[${task.id}] ${message}`);
       }
 
-      this.storage.updateStatus(task.id, {
-        last_status: 'success',
-        last_message: message,
-      });
+      task.last_status = 'success';
+      task.last_message = message;
+      task.status = task.trigger_type === 'date' ? 'completed' : 'scheduled';
 
-      // Update next run for interval tasks
-      if (task.trigger_type === 'interval') {
-        const { minutes = 0, hours = 0, days = 0 } = task.trigger_config;
-        const intervalMs = (minutes * 60 + hours * 3600 + days * 86400) * 1000;
-        const nextRun = new Date(Date.now() + intervalMs).toISOString();
-        this.storage.updateStatus(task.id, { next_run: nextRun });
+      const historyEntry: TaskHistoryEntry = {
+        run_at: startIso,
+        status: 'success',
+        message,
+      };
+      this.appendHistory(task, historyEntry);
+
+      if (task.trigger_type === 'date') {
+        task.enabled = false;
+        task.next_run = undefined;
+      } else {
+        task.next_run = this.computeNextRun(task, start);
       }
+
+      task.updated_at = new Date().toISOString();
+      this.storage.upsert(task);
 
       return { success: true, message };
+
     } catch (error: any) {
       const errorMessage = error.message || String(error);
+      console.error(`[${task.id}] Task failed:`, error);
 
-      this.storage.updateStatus(task.id, {
-        last_status: 'error',
-        last_message: errorMessage,
-      });
+      task.last_status = 'error';
+      task.last_message = errorMessage;
+      task.status = 'error';
+      task.next_run = this.computeNextRun(task, new Date());
+
+      const historyEntry: TaskHistoryEntry = {
+        run_at: startIso,
+        status: 'error',
+        message: errorMessage,
+      };
+      this.appendHistory(task, historyEntry);
+
+      task.updated_at = new Date().toISOString();
+      this.storage.upsert(task);
 
       return { success: false, message: errorMessage };
     }

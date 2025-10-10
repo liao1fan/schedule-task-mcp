@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
+    "cron-parser": "^4.9.0",
     "node-cron": "^3.0.3"
   },
   "devDependencies": {

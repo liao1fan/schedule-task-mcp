@@ -278,6 +278,18 @@ One-time tasks that run at a specific date/time.
 }
 ```
 
+Alternatively, omit `run_date` and provide delay fields (`delay_seconds`, `delay_minutes`, `delay_hours`, `delay_days`):
+```json
+{
+  "trigger_type": "date",
+  "trigger_config": {
+    "delay_minutes": 5
+  }
+}
+```
+
+When a provided `run_date` is in the past, the server automatically adjusts it to the nearest future time (using the supplied delay when available, otherwise `now + 1s`).
+
 Date-based tasks are automatically paused after execution.
 
 ## 📂 Task Storage

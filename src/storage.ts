@@ -5,21 +5,37 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+export type TaskStatus = 'scheduled' | 'running' | 'paused' | 'completed' | 'error';
+
+export interface TaskHistoryEntry {
+  run_at: string;
+  status: 'success' | 'error';
+  message?: string;
+}
+
 export interface TaskRecord {
   id: string;
   name: string;
   trigger_type: 'interval' | 'cron' | 'date';
   trigger_config: Record<string, any>;
+
+  // Legacy MCP tool call (deprecated, use agent_prompt instead)
   mcp_server?: string;
   mcp_tool?: string;
   mcp_arguments?: Record<string, any>;
+
+  // 🎯 New: Agent prompt for MCP Sampling
+  agent_prompt?: string;
+
   enabled: boolean;
+  status: TaskStatus;
   created_at: string;
   updated_at: string;
   last_run?: string;
   last_status?: 'success' | 'error' | 'running';
   last_message?: string;
   next_run?: string;
+  history?: TaskHistoryEntry[];
 }
 
 export class TaskStorage {
@@ -68,6 +84,18 @@ export class TaskStorage {
 
   list(): TaskRecord[] {
     return Array.from(this.tasks.values());
+  }
+
+  clearHistory(id: string): TaskRecord | undefined {
+    const task = this.tasks.get(id);
+    if (task) {
+      task.history = [];
+      task.last_message = undefined;
+      task.last_status = undefined;
+      task.updated_at = new Date().toISOString();
+      this.save();
+    }
+    return task;
   }
 
   delete(id: string): boolean {
