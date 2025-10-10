@@ -328,7 +328,11 @@ const tools: Tool[] = [
         },
         agent_prompt: {
           type: 'string',
-          description: 'Primary instruction executed when the task runs (recommended).'
+          description: 'Primary instruction executed when the task runs (recommended). Extract the user intent **after removing the scheduling phrase**, keep it as natural-language steps (e.g. "检查新视频，整理成AI早报并发送到某邮箱"). Do NOT provide code, function calls, or tool names here.',
+          examples: [
+            '检查新视频，整理成AI早报并发送到liaofanyishi1@163.com',
+            '获取今天的最新视频并生成摘要后发邮件给团队'
+          ]
         },
         mcp_server: {
           type: 'string',
@@ -410,7 +414,11 @@ const tools: Tool[] = [
         },
         agent_prompt: {
           type: 'string',
-          description: 'Updated agent prompt instruction (recommended).'
+          description: 'Updated agent prompt instruction (recommended). It should remain the natural-language task description **with scheduling wording removed**, without tool/function syntax.',
+          examples: [
+            '重新检查最新视频并只整理前3条，再发送邮件给运营',
+            '生成AI早报后发到liaofanyishi1@163.com'
+          ]
         }
       },
       required: ['task_id']
