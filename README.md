@@ -9,7 +9,7 @@
 
 - ⏰ **Multiple Trigger Types** - Support for interval, cron expressions, and one-time date triggers
 - 🔄 **Task Management** - Create, update, pause, resume, and delete tasks
-- 💾 **Persistent Storage** - Tasks are saved to JSON file and restored on restart
+- 💾 **Persistent Storage** - Tasks are saved in SQLite and restored automatically
 - 🎯 **MCP Integration** - Can trigger other MCP tools (extensible architecture)
 - 📊 **Status Tracking** - Track last run time, status, and next scheduled run
 - 🚀 **Easy to Use** - Simple API through MCP protocol
@@ -37,7 +37,7 @@ npm run build
 
 This is a standard MCP server that can be used with any MCP client. Configure it in your MCP client's configuration file.
 
-**Example configuration:**
+**Example configuration (using the npm package):**
 
 ```json
 {
@@ -50,13 +50,14 @@ This is a standard MCP server that can be used with any MCP client. Configure it
 }
 ```
 
-Or if installed globally:
+If you are running from the local source (for development/testing), configure it as:
 
 ```json
 {
   "mcpServers": {
     "schedule-task-mcp": {
-      "command": "schedule-task-mcp"
+      "command": "node",
+      "args": ["/absolute/path/to/schedule-task-mcp/dist/index.js"]
     }
   }
 }
@@ -194,35 +195,13 @@ This creates an interval-based task with trigger configuration:
 ### Example 2: Cron-based Task
 
 ```
-Create a task named "Daily backup" that runs every day at 2 AM using cron expression "0 2 * * *"
+Every morning at 2 o'clock, run a task called "Daily backup"
 ```
 
 ### Example 3: One-time Task
 
 ```
-Create a task named "Meeting reminder" that runs once on 2025-10-09T14:00:00Z
-```
-
-### Example 4: Task with MCP Tool Integration
-
-```
-Create a task that calls the tool "check_new_videos" from server "juya-mcp" every 5 minutes
-```
-
-This would create:
-```json
-{
-  "name": "Monitor new videos",
-  "trigger_type": "interval",
-  "trigger_config": {
-    "minutes": 5
-  },
-  "mcp_server": "juya-mcp",
-  "mcp_tool": "check_new_videos",
-  "mcp_arguments": {
-    "count": 10
-  }
-}
+Remind me about "Product launch meeting" this Friday at 2 PM
 ```
 
 ## 🔧 Trigger Types
