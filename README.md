@@ -64,7 +64,7 @@ Or if installed globally:
 
 ### Environment Variables
 
-- `SCHEDULE_TASK_DB_PATH` - Custom path for tasks database (default: `~/.schedule-task-mcp/tasks.json`)
+- `SCHEDULE_TASK_DB_PATH` - Custom path for tasks database (default: `~/.schedule-task-mcp/tasks.db`)
 - `SCHEDULE_TASK_TIMEZONE` - Override the detected system timezone when formatting `*_local` timestamps
 - `SCHEDULE_TASK_SAMPLING_TIMEOUT` - Timeout (ms) for `sampling/createMessage` requests (default: `180000`)
 
@@ -296,9 +296,10 @@ Date-based tasks are automatically paused after execution.
 
 ## 📂 Task Storage
 
-Tasks are stored in a JSON file at:
-- Default: `~/.schedule-task-mcp/tasks.json`
+Tasks are stored in a SQLite database:
+- Default: `~/.schedule-task-mcp/tasks.db`
 - Custom: Set via `SCHEDULE_TASK_DB_PATH` environment variable
+- On first run, any existing `tasks.json` will be migrated automatically (a `.bak` backup is kept)
 
 ## 🔌 Integration with Other MCP Servers
 

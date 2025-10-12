@@ -19,7 +19,7 @@ import * as cron from 'node-cron';
 import { formatInTimezone, getSystemTimeZone } from './format.js';
 
 // Default database path and timezone
-const DEFAULT_DB_PATH = path.join(os.homedir(), '.schedule-task-mcp', 'tasks.json');
+const DEFAULT_DB_PATH = path.join(os.homedir(), '.schedule-task-mcp', 'tasks.db');
 const DB_PATH = process.env.SCHEDULE_TASK_DB_PATH || DEFAULT_DB_PATH;
 const TIMEZONE = process.env.SCHEDULE_TASK_TIMEZONE || getSystemTimeZone();
 

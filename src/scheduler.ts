@@ -508,7 +508,7 @@ export class TaskScheduler {
             },
             CreateMessageResultSchema,
             {
-              timeoutMs: this.samplingTimeoutMs,
+              timeout: this.samplingTimeoutMs,
             }
           );
 
