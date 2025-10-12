@@ -32,41 +32,79 @@ function truncateText(value: string, limit = 160): string {
   return `${value.slice(0, limit - 3)}...`;
 }
 
+function formatTimestamp(localValue?: string, rawValue?: string, fallback = '暂无记录'): string {
+  return localValue ?? rawValue ?? fallback;
+}
+
+function humanReadableStatus(status?: string): string {
+  const mapping: Record<string, string> = {
+    scheduled: '已计划',
+    running: '执行中',
+    paused: '已暂停',
+    completed: '已完成',
+    error: '执行失败'
+  };
+  return status ? `${mapping[status] ?? status} (${status})` : '未知';
+}
+
+function humanReadableLastStatus(status?: string | null): string {
+  if (!status) return '暂无';
+  const mapping: Record<string, string> = {
+    success: '成功',
+    error: '失败',
+    running: '执行中'
+  };
+  return `${mapping[status] ?? status} (${status})`;
+}
+
+function describeTrigger(task: DescribedTask): string {
+  const summary = task.trigger_summary ? `（${task.trigger_summary}）` : '';
+  switch (task.trigger_type) {
+    case 'interval':
+      return `间隔任务${summary || '（未配置详细间隔）'}`;
+    case 'cron':
+      return `Cron 表达式${summary || ''}`;
+    case 'date':
+      return `一次性任务${summary || ''}`;
+    default:
+      return task.trigger_type;
+  }
+}
+
 function buildTaskSummary(task: DescribedTask, actionLabel: string): string {
-  const lines: string[] = [];
-  lines.push(`任务「${task.name}」(ID: ${task.id}) - ${actionLabel}`);
+  const nextRunLabel = formatTimestamp(task.next_run_local, task.next_run, '尚未安排（可能已执行完毕或已停用）');
+  const lastRunLabel = formatTimestamp(task.last_run_local, task.last_run);
+  const createdLabel = formatTimestamp(task.created_at_local, task.created_at, '未知');
+  const updatedLabel = formatTimestamp(task.updated_at_local, task.updated_at, '未知');
 
-  const triggerSummary = task.trigger_summary || '';
-  lines.push(`调度类型：${task.trigger_type}${triggerSummary ? `（${triggerSummary}）` : ''}`);
-  lines.push(`启用状态：${task.enabled ? '启用' : '停用'}；当前状态：${task.status}`);
+  const historyCount = Array.isArray(task.history) ? task.history.length : 0;
+  const latestHistory = historyCount > 0 ? task.history![0] : undefined;
+  const latestHistoryTime = latestHistory ? formatTimestamp(latestHistory.run_at_local, latestHistory.run_at) : undefined;
+  const latestHistoryMessage = latestHistory?.message ? truncateText(latestHistory.message) : undefined;
 
-  const nextRun = task.next_run_local ?? task.next_run ?? '未计算';
-  lines.push(`下次执行：${nextRun}`);
+  const detailLines = [
+    `任务「${task.name}」已${actionLabel}：`,
+    `- **任务名称**：${task.name}`,
+    `- **任务ID**：${task.id}`,
+    `- **触发类型**：${describeTrigger(task)}`,
+    task.trigger_type === 'cron' && task.trigger_config?.expression ? `- **Cron 表达式**：${task.trigger_config.expression}` : null,
+    task.trigger_type === 'interval' ? `- **间隔配置**：${JSON.stringify(task.trigger_config)}` : null,
+    task.trigger_type === 'date' ? `- **执行时间**：${task.trigger_config?.run_date ?? '未指定'}` : null,
+    task.agent_prompt ? `- **任务指令**：${task.agent_prompt}` : null,
+    task.mcp_server && task.mcp_tool ? `- **Legacy MCP 调用**：${task.mcp_server}.${task.mcp_tool}` : null,
+    `- **任务状态**：${humanReadableStatus(task.status)}`,
+    `- **是否启用**：${task.enabled ? '是 (enabled)' : '否 (disabled)'}`,
+    `- **创建时间**：${createdLabel}`,
+    `- **最后更新时间**：${updatedLabel}`,
+    `- **上次执行时间**：${lastRunLabel}`,
+    `- **上次执行状态**：${humanReadableLastStatus(task.last_status)}`,
+    latestHistoryMessage ? `- **上次执行消息**：${latestHistoryMessage}` : null,
+    `- **下次执行时间**：${nextRunLabel}`,
+    `- **历史记录条数**：${historyCount}`,
+    latestHistoryTime ? `- **最近历史时间**：${latestHistoryTime}` : null
+  ].filter(Boolean) as string[];
 
-  const lastRun = task.last_run_local ?? task.last_run ?? '无记录';
-  lines.push(`上次执行：${lastRun}`);
-
-  if (task.agent_prompt) {
-    lines.push(`Agent 指令：${task.agent_prompt}`);
-  }
-  if (task.mcp_server && task.mcp_tool) {
-    lines.push(`Legacy MCP 调用：${task.mcp_server}.${task.mcp_tool}`);
-  }
-
-  if (Array.isArray(task.history) && task.history.length > 0) {
-    const latest = task.history[0];
-    const latestTime = latest.run_at_local ?? latest.run_at;
-    let historyLine = `历史记录：共 ${task.history.length} 条`;
-    if (latestTime) {
-      historyLine += `，最近 ${latestTime}`;
-    }
-    if (latest.message) {
-      historyLine += ` - ${truncateText(latest.message)}`;
-    }
-    lines.push(historyLine);
-  }
-
-  return lines.join('\n');
+  return detailLines.join('\n');
 }
 
 function formatTaskResponse(task: DescribedTask, actionLabel: string, extra: Record<string, any> = {}) {
