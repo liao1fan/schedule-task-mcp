@@ -3,16 +3,15 @@
 [![npm version](https://badge.fury.io/js/schedule-task-mcp.svg)](https://www.npmjs.com/package/schedule-task-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**Schedule Task MCP** is a universal scheduled task management MCP (Model Context Protocol) server that allows you to create, manage, and execute scheduled tasks with support for interval, cron, and date-based triggers.
+Schedule Task MCP is a scheduled-task management server that speaks the Model Context Protocol (MCP). It lets any MCP-aware agent create, inspect, and run jobs that trigger on intervals, cron expressions, or one-time dates, while persisting state in SQLite and returning rich task summaries that are easy for humans to read.
 
-## ✨ Features
+## ✨ Highlights
 
-- ⏰ **Multiple Trigger Types** - Support for interval, cron expressions, and one-time date triggers
-- 🔄 **Task Management** - Create, update, pause, resume, and delete tasks
-- 💾 **Persistent Storage** - Tasks are saved in SQLite and restored automatically
-- 🎯 **MCP Integration** - Can trigger other MCP tools (extensible architecture)
-- 📊 **Status Tracking** - Track last run time, status, and next scheduled run
-- 🚀 **Easy to Use** - Simple API through MCP protocol
+- **Natural-language friendly** – Designed so agents can take user phrases like “every morning at 9:30 send me an AI briefing” and turn them into actionable schedules.
+- **Multiple trigger styles** – Interval, cron, and one-time date triggers are all supported, plus delay-based shortcuts (e.g., “in 30 minutes”).
+- **Rich responses** – Every task operation returns a detailed Markdown summary *and* the raw JSON payload for downstream automation.
+- **SQLite persistence** – Tasks live in `~/.schedule-task-mcp/tasks.db`; legacy `tasks.json` files are migrated automatically on first run.
+- **Sampling-aware** – When `agent_prompt` is provided, the scheduler can call back into the agent via MCP sampling to execute natural-language instructions.
 
 ## 📦 Installation
 
@@ -31,13 +30,9 @@ npm install
 npm run build
 ```
 
-## 🚀 Usage
+## 🚀 Registering the MCP Server
 
-### Configure MCP Client
-
-This is a standard MCP server that can be used with any MCP client. Configure it in your MCP client's configuration file.
-
-**Example configuration (using the npm package):**
+Add the server to your MCP client configuration. If you rely on the npm package, npx will fetch the latest build for you:
 
 ```json
 {
@@ -50,7 +45,7 @@ This is a standard MCP server that can be used with any MCP client. Configure it
 }
 ```
 
-If you are running from the local source (for development/testing), configure it as:
+When developing from a local checkout, point the client to your compiled `dist/index.js`:
 
 ```json
 {
@@ -63,128 +58,51 @@ If you are running from the local source (for development/testing), configure it
 }
 ```
 
-### Environment Variables
+## ⚙️ Environment Variables
 
-- `SCHEDULE_TASK_DB_PATH` - Custom path for tasks database (default: `~/.schedule-task-mcp/tasks.db`)
-- `SCHEDULE_TASK_TIMEZONE` - Override the detected system timezone when formatting `*_local` timestamps
-- `SCHEDULE_TASK_SAMPLING_TIMEOUT` - Timeout (ms) for `sampling/createMessage` requests (default: `180000`)
+| Variable | Description |
+| --- | --- |
+| `SCHEDULE_TASK_DB_PATH` | Override the SQLite location (default `~/.schedule-task-mcp/tasks.db`). A legacy `tasks.json` found in the same folder is migrated once. |
+| `SCHEDULE_TASK_TIMEZONE` | Force a timezone when formatting `*_local` timestamps; defaults to the host timezone. |
+| `SCHEDULE_TASK_SAMPLING_TIMEOUT` | Timeout in milliseconds for `sampling/createMessage` calls (default `180000`, i.e., 3 minutes). |
 
-## 🛠️ Available Tools
+## 🧰 Core Tools
 
-### 1. `create_task`
+All tools are exposed through MCP. While arguments are shown for completeness, most agents can rely on natural-language prompts; the server will parse scheduling phrases automatically.
 
-Create a new scheduled task.
+| Tool | Purpose | Typical natural-language prompt |
+| --- | --- | --- |
+| `create_task` | Create a new schedule. Accepts `name`, `trigger_type`, `trigger_config`, and optional `agent_prompt`. | “Every weekday at 9am, check for new videos and email me the AI briefing.” |
+| `list_tasks` | Display every task with status and next run. | “Show me all my scheduled jobs.” |
+| `get_task` | Inspect a single task by ID. | “Give me the details for task-123.” |
+| `update_task` | Modify an existing task (any field supported by `create_task`). | “Change task-123 so it runs every 2 hours instead.” |
+| `delete_task` | Remove a task permanently. | “Delete task-123.” |
+| `pause_task` / `resume_task` | Toggle execution without deleting. | “Pause task-123.” / “Resume task-123.” |
+| `execute_task` | Run immediately (manual trigger). | “Run task-123 right now.” |
+| `clear_task_history` | Wipe stored history for a task while keeping it scheduled. | “Clear the run history for task-123.” |
+| `get_current_time` | Return the current time in the configured timezone. | “What time is it for the scheduler?” |
 
-**Parameters:**
-- `name` (string, required): Task name/description
-- `trigger_type` (string, required): One of `interval`, `cron`, or `date`
-- `trigger_config` (object, required): Trigger configuration
-  - For `interval`: `{minutes?: number, hours?: number, days?: number}`
-  - For `cron`: `{expression: string}` (e.g., `"0 9 * * *"` for daily at 9 AM)
-  - For `date`: `{run_date: string}` (ISO date string)
-- `mcp_server` (string, optional): MCP server to call
-- `mcp_tool` (string, optional): MCP tool to call
-- `mcp_arguments` (object, optional): Arguments to pass to the tool
+Every response includes:
 
-**Example:**
-```
-Create a task that runs every 5 minutes
-```
+- `summary`: a Markdown bullet list summarising name, ID, trigger, state, last/next execution, and agent instructions.
+- `detail`: the raw `describeTask` JSON, including convenience fields such as `next_run_local`, `last_run_local`, and `trigger_config_local` for date triggers.
 
-### 2. `list_tasks`
+## 🧪 Usage Examples
 
-List all scheduled tasks with their status.
+- **Interval** – “Every 30 minutes, run ‘Check system health’.”
+- **Cron** – “At 2 o’clock every morning, run ‘Daily backup’.”
+- **One-time** – “Remind me about ‘Product launch meeting’ this Friday at 2 PM.”
 
-**Example:**
-```
-List all my scheduled tasks
-```
+The server fills in default names if omitted, parses the timing phrase, and stores any natural-language instruction into `agent_prompt` for later sampling.
 
-### 3. `get_task`
+## 🔧 Trigger Reference
 
-Get details of a specific task.
+### Interval
 
-**Parameters:**
-- `task_id` (string, required): Task ID
+Use when you need a fixed gap between runs. `trigger_config` accepts any combination of `seconds`, `minutes`, `hours`, or `days`:
 
-**Example:**
-```
-Show me the details of task task-123456
-```
-
-### 4. `update_task`
-
-Update an existing task.
-
-**Parameters:**
-- `task_id` (string, required): Task ID
-- Any fields from `create_task` (optional)
-
-**Example:**
-```
-Update task task-123456 to run every 10 minutes instead
-```
-
-### 5. `delete_task`
-
-Delete a task permanently.
-
-**Parameters:**
-- `task_id` (string, required): Task ID
-
-**Example:**
-```
-Delete task task-123456
-```
-
-### 6. `pause_task`
-
-Pause a task (stop execution without deleting).
-
-**Parameters:**
-- `task_id` (string, required): Task ID
-
-**Example:**
-```
-Pause task task-123456
-```
-
-### 7. `resume_task`
-
-Resume a paused task.
-
-**Parameters:**
-- `task_id` (string, required): Task ID
-
-**Example:**
-```
-Resume task task-123456
-```
-
-### 8. `execute_task`
-
-Execute a task immediately (manual trigger).
-
-**Parameters:**
-- `task_id` (string, required): Task ID
-
-**Example:**
-```
-Run task task-123456 now
-```
-
-## 📖 Usage Examples
-
-### Example 1: Simple Interval Task
-
-```
-Create a task named "Check system status" that runs every 30 minutes
-```
-
-This creates an interval-based task with trigger configuration:
 ```json
 {
-  "name": "Check system status",
   "trigger_type": "interval",
   "trigger_config": {
     "minutes": 30
@@ -192,131 +110,58 @@ This creates an interval-based task with trigger configuration:
 }
 ```
 
-### Example 2: Cron-based Task
+### Cron
 
-```
-Every morning at 2 o'clock, run a task called "Daily backup"
-```
+For calendar-based repetition, supply a five-field cron expression. A few handy examples:
 
-### Example 3: One-time Task
+- `* * * * *` – every minute
+- `0 * * * *` – hourly
+- `0 9 * * *` – every day at 09:00
+- `0 9 * * 1` – Mondays at 09:00
+- `0 0 1 * *` – the first day of each month at midnight
 
-```
-Remind me about "Product launch meeting" this Friday at 2 PM
-```
+### Date / Delay
 
-## 🔧 Trigger Types
+For one-offs, either provide an explicit ISO timestamp or relative delay fields:
 
-### Interval Trigger
-
-Recurring tasks that run at fixed intervals.
-
-**Configuration:**
-```json
-{
-  "trigger_type": "interval",
-  "trigger_config": {
-    "minutes": 30,    // Optional: minutes
-    "hours": 2,       // Optional: hours
-    "days": 1         // Optional: days
-  }
-}
-```
-
-At least one field (minutes, hours, or days) must be provided.
-
-### Cron Trigger
-
-Tasks scheduled using cron expressions.
-
-**Configuration:**
-```json
-{
-  "trigger_type": "cron",
-  "trigger_config": {
-    "expression": "0 9 * * *"  // Daily at 9 AM
-  }
-}
-```
-
-**Common cron expressions:**
-- `* * * * *` - Every minute
-- `0 * * * *` - Every hour
-- `0 9 * * *` - Daily at 9 AM
-- `0 9 * * 1` - Every Monday at 9 AM
-- `0 0 1 * *` - First day of every month at midnight
-
-### Date Trigger
-
-One-time tasks that run at a specific date/time.
-
-**Configuration:**
 ```json
 {
   "trigger_type": "date",
   "trigger_config": {
-    "run_date": "2025-10-09T14:00:00Z"  // ISO 8601 format
+    "delay_minutes": 10
   }
 }
 ```
 
-Alternatively, omit `run_date` and provide delay fields (`delay_seconds`, `delay_minutes`, `delay_hours`, `delay_days`):
-```json
-{
-  "trigger_type": "date",
-  "trigger_config": {
-    "delay_minutes": 5
-  }
-}
-```
+If the supplied timestamp is in the past, the server automatically adjusts it (using the delay if present, otherwise `now + 1s`). Date-based tasks mark themselves complete once they run.
 
-When a provided `run_date` is in the past, the server automatically adjusts it to the nearest future time (using the supplied delay when available, otherwise `now + 1s`).
+## 🗄️ Storage
 
-Date-based tasks are automatically paused after execution.
+- Default database: `~/.schedule-task-mcp/tasks.db`
+- A legacy `tasks.json` in the same folder is migrated to SQLite the first time the new server runs (backup saved as `tasks.json.bak`).
 
-## 📂 Task Storage
+## 🔌 Integration Notes
 
-Tasks are stored in a SQLite database:
-- Default: `~/.schedule-task-mcp/tasks.db`
-- Custom: Set via `SCHEDULE_TASK_DB_PATH` environment variable
-- On first run, any existing `tasks.json` will be migrated automatically (a `.bak` backup is kept)
-
-## 🔌 Integration with Other MCP Servers
-
-Schedule Task MCP can trigger tools from other MCP servers. Simply specify:
-- `mcp_server`: The name of the MCP server (as configured in your MCP client)
-- `mcp_tool`: The tool name to call
-- `mcp_arguments`: Arguments to pass
-
-**Note:** Currently, the MCP protocol doesn't support direct inter-server communication. This feature is designed for future extensibility when such capabilities become available.
+You can still attach `mcp_server`, `mcp_tool`, and `mcp_arguments` to a task for future MCP-to-MCP orchestration. At present the scheduler doesn’t call other servers directly; instead, prefer `agent_prompt` so the agent can coordinate follow-up actions through sampling.
 
 ## 🛣️ Roadmap
 
-- [ ] Add support for task dependencies
-- [ ] Add task execution history/logs
-- [ ] Add webhooks for task completion
-- [ ] Support for task retry logic
-- [ ] Web UI for task management
+- [ ] Task dependencies
+- [ ] Extended execution history and search
+- [ ] Webhooks / notifications on completion
+- [ ] Retry policies
+- [ ] Web dashboard for interactive management
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+PRs are welcome! Please file an issue or open a pull request with improvements or bug fixes.
 
 ## 📄 License
 
 [MIT License](LICENSE)
 
-## 👤 Author
+## 🙏 Acknowledgements
 
-**liao1fan** <liaofanyishi1@gmail.com>
-
-## 🙏 Acknowledgments
-
-- [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
-- [node-cron](https://github.com/node-cron/node-cron) - Cron implementation
-- [APScheduler](https://apscheduler.readthedocs.io/) - Inspiration for the design
-
-## 📚 Related Projects
-
-- [Model Context Protocol](https://modelcontextprotocol.io/) - Official MCP documentation
-- [MCP Servers](https://github.com/modelcontextprotocol/servers) - Official MCP server implementations
-- [MCP Clients](https://github.com/modelcontextprotocol) - Various MCP client implementations
+- [Model Context Protocol](https://modelcontextprotocol.io/) – specification and reference ecosystem
+- [node-cron](https://github.com/node-cron/node-cron) – cron implementation used under the hood
+- [APScheduler](https://apscheduler.readthedocs.io/) – inspiration for the scheduling model
