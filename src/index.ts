@@ -23,6 +23,69 @@ const DEFAULT_DB_PATH = path.join(os.homedir(), '.schedule-task-mcp', 'tasks.db'
 const DB_PATH = process.env.SCHEDULE_TASK_DB_PATH || DEFAULT_DB_PATH;
 const TIMEZONE = process.env.SCHEDULE_TASK_TIMEZONE || getSystemTimeZone();
 
+type DescribedTask = ReturnType<TaskScheduler['describeTask']>;
+
+function truncateText(value: string, limit = 160): string {
+  if (value.length <= limit) {
+    return value;
+  }
+  return `${value.slice(0, limit - 3)}...`;
+}
+
+function buildTaskSummary(task: DescribedTask, actionLabel: string): string {
+  const lines: string[] = [];
+  lines.push(`任务「${task.name}」(ID: ${task.id}) - ${actionLabel}`);
+
+  const triggerSummary = task.trigger_summary || '';
+  lines.push(`调度类型：${task.trigger_type}${triggerSummary ? `（${triggerSummary}）` : ''}`);
+  lines.push(`启用状态：${task.enabled ? '启用' : '停用'}；当前状态：${task.status}`);
+
+  const nextRun = task.next_run_local ?? task.next_run ?? '未计算';
+  lines.push(`下次执行：${nextRun}`);
+
+  const lastRun = task.last_run_local ?? task.last_run ?? '无记录';
+  lines.push(`上次执行：${lastRun}`);
+
+  if (task.agent_prompt) {
+    lines.push(`Agent 指令：${task.agent_prompt}`);
+  }
+  if (task.mcp_server && task.mcp_tool) {
+    lines.push(`Legacy MCP 调用：${task.mcp_server}.${task.mcp_tool}`);
+  }
+
+  if (Array.isArray(task.history) && task.history.length > 0) {
+    const latest = task.history[0];
+    const latestTime = latest.run_at_local ?? latest.run_at;
+    let historyLine = `历史记录：共 ${task.history.length} 条`;
+    if (latestTime) {
+      historyLine += `，最近 ${latestTime}`;
+    }
+    if (latest.message) {
+      historyLine += ` - ${truncateText(latest.message)}`;
+    }
+    lines.push(historyLine);
+  }
+
+  return lines.join('\n');
+}
+
+function formatTaskResponse(task: DescribedTask, actionLabel: string, extra: Record<string, any> = {}) {
+  return {
+    success: true,
+    action: actionLabel,
+    summary: buildTaskSummary(task, actionLabel),
+    detail: task,
+    ...extra,
+  };
+}
+
+function formatNotFoundResponse(taskId: string) {
+  return {
+    success: false,
+    error: `Task not found: ${taskId}`,
+  };
+}
+
 
 // Initialize scheduler (will receive MCP client after server starts)
 let scheduler: TaskScheduler;
@@ -551,10 +614,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({
-                success: true,
-                task
-              }, null, 2)
+              text: JSON.stringify(
+                formatTaskResponse(task, '创建成功', {
+                  message: 'Task created'
+                }),
+                null,
+                2
+              )
             }
           ]
         };
@@ -599,10 +665,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({
-                success: true,
-                task
-              }, null, 2)
+              text: JSON.stringify(
+                formatTaskResponse(task, '任务详情', {
+                  message: 'Task fetched'
+                }),
+                null,
+                2
+              )
             }
           ]
         };
@@ -657,10 +726,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({
-                success: true,
-                task
-              }, null, 2)
+              text: JSON.stringify(
+                formatTaskResponse(task, '更新完成', {
+                  message: 'Task updated'
+                }),
+                null,
+                2
+              )
             }
           ]
         };
@@ -671,16 +743,38 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (typeof deleteId !== 'string' || deleteId.trim().length === 0) {
           throw new Error('task_id is required');
         }
-        const deleted = await scheduler.deleteTask(deleteId.trim());
+        const preparedId = deleteId.trim();
+        const snapshot = scheduler.getTask(preparedId);
+        if (!snapshot) {
+          const notFound = formatNotFoundResponse(preparedId);
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(notFound, null, 2)
+              }
+            ],
+            isError: true
+          };
+        }
+
+        const describedSnapshot = scheduler.describeTask(snapshot);
+        const deleted = await scheduler.deleteTask(preparedId);
 
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({
-                success: deleted,
-                message: deleted ? 'Task deleted' : 'Task not found'
-              }, null, 2)
+              text: JSON.stringify(
+                deleted
+                  ? formatTaskResponse(describedSnapshot, '已删除', {
+                    message: 'Task deleted',
+                    detail_note: 'detail 字段为删除前的任务快照'
+                  })
+                  : formatNotFoundResponse(preparedId),
+                null,
+                2
+              )
             }
           ]
         };
@@ -699,11 +793,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({
-                success: true,
-                message: 'Task history cleared',
-                task
-              }, null, 2)
+              text: JSON.stringify(
+                formatTaskResponse(task, '历史已清空', {
+                  message: 'Task history cleared'
+                }),
+                null,
+                2
+              )
             }
           ]
         };
@@ -721,11 +817,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({
-                success: true,
-                message: 'Task paused',
-                task
-              }, null, 2)
+              text: JSON.stringify(
+                formatTaskResponse(task, '已暂停', {
+                  message: 'Task paused'
+                }),
+                null,
+                2
+              )
             }
           ]
         };
@@ -743,11 +841,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           content: [
             {
               type: 'text',
-              text: JSON.stringify({
-                success: true,
-                message: 'Task resumed',
-                task
-              }, null, 2)
+              text: JSON.stringify(
+                formatTaskResponse(task, '已恢复', {
+                  message: 'Task resumed'
+                }),
+                null,
+                2
+              )
             }
           ]
         };
@@ -758,13 +858,46 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (typeof executeId !== 'string' || executeId.trim().length === 0) {
           throw new Error('task_id is required');
         }
-        const result = await scheduler.executeTask(executeId.trim());
+        const trimmedId = executeId.trim();
+        const result = await scheduler.executeTask(trimmedId);
+        if (!result.success) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(result, null, 2)
+              }
+            ],
+            isError: true
+          };
+        }
+
+        const updatedTaskRecord = scheduler.getTask(trimmedId);
+        if (!updatedTaskRecord) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(formatNotFoundResponse(trimmedId), null, 2)
+              }
+            ],
+            isError: true
+          };
+        }
+
+        const task = scheduler.describeTask(updatedTaskRecord);
 
         return {
           content: [
             {
               type: 'text',
-              text: JSON.stringify(result, null, 2)
+              text: JSON.stringify(
+                formatTaskResponse(task, '手动执行完成', {
+                  message: result.message
+                }),
+                null,
+                2
+              )
             }
           ]
         };
