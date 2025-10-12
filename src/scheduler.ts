@@ -30,11 +30,15 @@ export class TaskScheduler {
   private mcpServer?: Server;
 
   private readonly timeZone: string;
+  private readonly samplingTimeoutMs: number;
 
   constructor(config: SchedulerConfig) {
     this.storage = new TaskStorage(config.dbPath);
     this.mcpServer = config.mcpServer;
     this.timeZone = process.env.SCHEDULE_TASK_TIMEZONE || getSystemTimeZone();
+    const timeoutEnv = process.env.SCHEDULE_TASK_SAMPLING_TIMEOUT;
+    const parsedTimeout = timeoutEnv ? Number(timeoutEnv) : NaN;
+    this.samplingTimeoutMs = Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? parsedTimeout : 180_000;
   }
 
   private computeIntervalMs(config: IntervalTriggerConfig): number {
@@ -502,7 +506,10 @@ export class TaskScheduler {
                 maxTokens: 2000
               }
             },
-            CreateMessageResultSchema
+            CreateMessageResultSchema,
+            {
+              timeoutMs: this.samplingTimeoutMs,
+            }
           );
 
           const content = (response as any).content?.text || JSON.stringify(response);
@@ -548,7 +555,10 @@ export class TaskScheduler {
       return { success: true, message };
 
     } catch (error: any) {
-      const errorMessage = error.message || String(error);
+      let errorMessage = error?.message || String(error);
+      if (error?.code === -32001) {
+        errorMessage = `Sampling request timed out after ${Math.round(this.samplingTimeoutMs / 1000)}s`;
+      }
       console.error(`[${task.id}] Task failed:`, error);
 
       task.last_status = 'error';

@@ -65,6 +65,8 @@ Or if installed globally:
 ### Environment Variables
 
 - `SCHEDULE_TASK_DB_PATH` - Custom path for tasks database (default: `~/.schedule-task-mcp/tasks.json`)
+- `SCHEDULE_TASK_TIMEZONE` - Override the detected system timezone when formatting `*_local` timestamps
+- `SCHEDULE_TASK_SAMPLING_TIMEOUT` - Timeout (ms) for `sampling/createMessage` requests (default: `180000`)
 
 ## 🛠️ Available Tools
 
