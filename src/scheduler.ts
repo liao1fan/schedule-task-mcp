@@ -113,8 +113,14 @@ export class TaskScheduler {
       }
       case 'cron':
         return `Cron: ${task.trigger_config.expression}`;
-      case 'date':
-        return `一次性 @ ${task.trigger_config.run_date}`;
+      case 'date': {
+        const runDate = (task.trigger_config as Record<string, any>).run_date;
+        if (!runDate) {
+          return '一次性 @ 未指定';
+        }
+        const localized = formatInTimezone(runDate, this.timeZone, runDate);
+        return `一次性 @ ${localized ?? runDate}`;
+      }
       default:
         return task.trigger_type;
     }
