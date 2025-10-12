@@ -180,6 +180,7 @@ export class TaskScheduler {
     created_at_local?: string;
     updated_at_local?: string;
     history?: Array<TaskHistoryEntry & { run_at_local?: string }>;
+    trigger_config_local?: Record<string, any>;
   } {
     const createdAtLocal = formatInTimezone(task.created_at, this.timeZone, task.created_at);
     const updatedAtLocal = formatInTimezone(task.updated_at, this.timeZone, task.updated_at);
@@ -190,6 +191,18 @@ export class TaskScheduler {
       run_at_local: formatInTimezone(entry.run_at, this.timeZone, entry.run_at),
     }));
 
+    let triggerConfigLocal: Record<string, any> | undefined;
+    if (task.trigger_type === 'date' && task.trigger_config) {
+      const config = task.trigger_config as Record<string, any>;
+      const runDate = config.run_date;
+      if (runDate) {
+        triggerConfigLocal = {
+          ...config,
+          run_date_local: formatInTimezone(runDate, this.timeZone, runDate),
+        };
+      }
+    }
+
     return {
       ...task,
       history: historyWithLocal,
@@ -198,6 +211,7 @@ export class TaskScheduler {
       last_run_local: lastRunLocal,
       created_at_local: createdAtLocal,
       updated_at_local: updatedAtLocal,
+      trigger_config_local: triggerConfigLocal,
     };
   }
 

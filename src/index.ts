@@ -82,14 +82,18 @@ function buildTaskSummary(task: DescribedTask, actionLabel: string): string {
   const latestHistoryTime = latestHistory ? formatTimestamp(latestHistory.run_at_local, latestHistory.run_at) : undefined;
   const latestHistoryMessage = latestHistory?.message ? truncateText(latestHistory.message) : undefined;
 
+  const triggerConfig = task.trigger_config ?? {};
+  const triggerConfigLocal = (task as any).trigger_config_local ?? {};
+  const runDateLocal = triggerConfigLocal.run_date_local ?? (triggerConfig.run_date ? formatTimestamp(undefined, triggerConfig.run_date) : undefined);
+
   const detailLines = [
     `任务「${task.name}」已${actionLabel}：`,
     `- **任务名称**：${task.name}`,
     `- **任务ID**：${task.id}`,
     `- **触发类型**：${describeTrigger(task)}`,
-    task.trigger_type === 'cron' && task.trigger_config?.expression ? `- **Cron 表达式**：${task.trigger_config.expression}` : null,
-    task.trigger_type === 'interval' ? `- **间隔配置**：${JSON.stringify(task.trigger_config)}` : null,
-    task.trigger_type === 'date' ? `- **执行时间**：${task.trigger_config?.run_date ?? '未指定'}` : null,
+    task.trigger_type === 'cron' && triggerConfig.expression ? `- **Cron 表达式**：${triggerConfig.expression}` : null,
+    task.trigger_type === 'interval' ? `- **间隔配置**：${JSON.stringify(triggerConfig)}` : null,
+    task.trigger_type === 'date' ? `- **执行时间**：${runDateLocal ?? '未指定'}` : null,
     task.agent_prompt ? `- **任务指令**：${task.agent_prompt}` : null,
     task.mcp_server && task.mcp_tool ? `- **Legacy MCP 调用**：${task.mcp_server}.${task.mcp_tool}` : null,
     `- **任务状态**：${humanReadableStatus(task.status)}`,
@@ -666,10 +670,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case 'list_tasks': {
         const statusFilter = args.status as string | undefined;
-        const tasks = scheduler
+        const describedTasks = scheduler
           .listTasks()
           .filter((task) => (statusFilter ? task.status === statusFilter : true))
           .map((task) => scheduler.describeTask(task));
+
+        const taskEntries = describedTasks.map((task) => ({
+          summary: buildTaskSummary(task, '当前状态'),
+          detail: task
+        }));
 
         return {
           content: [
@@ -677,8 +686,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
               type: 'text',
               text: JSON.stringify({
                 success: true,
-                count: tasks.length,
-                tasks
+                count: taskEntries.length,
+                tasks: taskEntries
               }, null, 2)
             }
           ]
