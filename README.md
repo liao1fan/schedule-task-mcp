@@ -58,6 +58,26 @@ When developing from a local checkout, point the client to your compiled `dist/i
 }
 ```
 
+You can inject environment variables directly from the MCP configuration by adding an `env` block. For example:
+
+```json
+{
+  "mcpServers": {
+    "schedule-task-mcp": {
+      "command": "npx",
+      "args": ["-y", "schedule-task-mcp"],
+      "env": {
+        "SCHEDULE_TASK_TIMEZONE": "Asia/Shanghai",
+        "SCHEDULE_TASK_DB_PATH": "~/scheduler/tasks.db",
+        "SCHEDULE_TASK_SAMPLING_TIMEOUT": "300000"
+      }
+    }
+  }
+}
+```
+
+Any variables listed under `env` override the process defaults, so each MCP client can have its own scheduler settings without touching global shell configuration.
+
 ## ⚙️ Environment Variables
 
 | Variable | Description |
