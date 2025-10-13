@@ -338,21 +338,21 @@ const server = new Server(
 const tools: Tool[] = [
   {
     name: 'create_task',
-    description: 'Create a new scheduled task with interval, cron, or date trigger. Use agent_prompt for AI-powered task execution via MCP Sampling.',
+    description: 'Create a scheduled task ONLY when the user clearly wants something later. Classify the trigger (interval / cron / one-time), call get_current_time first, then build the payload and return a human-readable summary.',
     inputSchema: {
       type: 'object',
       properties: {
         name: {
           type: 'string',
-          description: 'Task name/description'
+          description: 'Task name/description (e.g. "Daily Status Check").'
         },
         trigger_type: {
           type: 'string',
           enum: ['interval', 'cron', 'date'],
-          description: 'Trigger type: interval (recurring), cron (cron expression), or date (one-time)'
+          description: 'Trigger kind: interval = recurring delay, cron = specific clock times, date = one-time or relative delay.'
         },
         trigger_config: {
-          description: 'Trigger configuration. Choose fields that match the trigger_type.',
+          description: 'Trigger configuration. MUST match trigger_type. Examples: interval -> {"minutes": 15}; cron -> {"expression": "30 7 * * 1-5"}; date -> {"delay_minutes": 45}.',
           oneOf: [
             {
               title: 'Interval trigger',
@@ -433,7 +433,7 @@ const tools: Tool[] = [
         },
         agent_prompt: {
           type: 'string',
-          description: 'Primary instruction executed when the task runs (recommended). Extract the user intent **after removing the scheduling phrase**, keep it as natural-language steps (e.g. "检查新视频，整理成AI早报并发送到某邮箱"). Do NOT provide code, function calls, or tool names here.',
+          description: 'Plain-language instruction executed when the task fires. REMOVE the timing phrase and keep friendly prose (e.g. "Check for new videos and email me the AI briefing"). No code/tool syntax.',
           examples: [
             '检查新视频，整理成AI早报并发送到liaofanyishi1@163.com',
             '获取今天的最新视频并生成摘要后发邮件给团队'
@@ -457,20 +457,20 @@ const tools: Tool[] = [
   },
   {
     name: 'list_tasks',
-    description: 'List all scheduled tasks',
+    description: 'List every task along with status, next run, last run, and stored instructions. Use after creating, updating, or auditing schedules.',
     inputSchema: {
       type: 'object',
       properties: {
         status: {
           type: 'string',
-          description: 'Optional status filter (scheduled, running, paused, completed, error)',
+          description: 'Optional status filter (scheduled, running, paused, completed, error). Leave blank to return everything.',
         }
       }
     }
   },
   {
     name: 'get_task',
-    description: 'Get details of a specific task',
+    description: 'Return the full details for a task ID, including Markdown summary, raw JSON, history, and localized timestamps.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -484,7 +484,7 @@ const tools: Tool[] = [
   },
   {
     name: 'update_task',
-    description: 'Update an existing task',
+    description: 'Modify an existing task (name, trigger, agent_prompt, etc.). After updating, the response shows the recalculated next run.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -499,11 +499,11 @@ const tools: Tool[] = [
         trigger_type: {
           type: 'string',
           enum: ['interval', 'cron', 'date'],
-          description: 'New trigger type (optional)'
+          description: 'New trigger type (optional). If you change it, adjust trigger_config accordingly.'
         },
         trigger_config: {
           type: 'object',
-          description: 'New trigger configuration (optional)'
+          description: 'New trigger configuration (optional). Must align with trigger_type.'
         },
         mcp_server: {
           type: 'string',
@@ -531,7 +531,7 @@ const tools: Tool[] = [
   },
   {
     name: 'delete_task',
-    description: 'Delete a task',
+    description: 'Delete a task permanently. The response includes the final snapshot (detail + summary) so you can confirm the removal.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -545,7 +545,7 @@ const tools: Tool[] = [
   },
   {
     name: 'clear_task_history',
-    description: 'Clear run history and reset last run info for a task',
+    description: 'Clear the stored run history for a task while keeping it scheduled; helpful before a new reporting period.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -559,7 +559,7 @@ const tools: Tool[] = [
   },
   {
     name: 'pause_task',
-    description: 'Pause a task (disable execution)',
+    description: 'Pause a task (disable future runs without deleting). Ideal for vacations or temporary shutdowns.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -573,7 +573,7 @@ const tools: Tool[] = [
   },
   {
     name: 'resume_task',
-    description: 'Resume a paused task',
+    description: 'Resume a paused task and recompute its next run time.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -587,7 +587,7 @@ const tools: Tool[] = [
   },
   {
     name: 'execute_task',
-    description: 'Execute a task immediately (manual trigger)',
+    description: 'Manually run a task right now (test or catch-up). Response includes live output and the updated schedule.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -601,7 +601,7 @@ const tools: Tool[] = [
   },
   {
     name: 'get_current_time',
-    description: 'Get current date and time in the configured timezone (SCHEDULE_TASK_TIMEZONE env var, defaults to Asia/Shanghai). Returns ISO 8601 format timestamp.',
+    description: 'Return the scheduler\'s current time (ISO + readable). Always call this before creating/updating schedules so you align with the user timezone.',
     inputSchema: {
       type: 'object',
       properties: {
