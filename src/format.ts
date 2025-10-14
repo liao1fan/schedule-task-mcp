@@ -5,9 +5,9 @@ export function getSystemTimeZone(): string {
       return tz;
     }
   } catch (error) {
-    console.warn('[schedule-task-mcp] Unable to resolve system timezone, falling back to UTC', error);
+    console.warn('[schedule-task-mcp] Unable to resolve system timezone, falling back to Asia/Shanghai', error);
   }
-  return 'UTC';
+  return 'Asia/Shanghai';
 }
 
 export function formatInTimezone(dateIso: string | undefined, timeZone: string, fallback?: string): string | undefined {

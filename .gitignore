@@ -6,3 +6,4 @@ dist/
 *.sqlite
 .env
 .npmrc
+PUBLISH_GUIDE.md

@@ -21,7 +21,7 @@ import { formatInTimezone, getSystemTimeZone } from './format.js';
 // Default database path and timezone
 const DEFAULT_DB_PATH = path.join(os.homedir(), '.schedule-task-mcp', 'tasks.db');
 const DB_PATH = process.env.SCHEDULE_TASK_DB_PATH || DEFAULT_DB_PATH;
-const TIMEZONE = process.env.SCHEDULE_TASK_TIMEZONE || getSystemTimeZone();
+const TIMEZONE = process.env.SCHEDULE_TASK_TIMEZONE || getSystemTimeZone() || 'Asia/Shanghai';
 
 type DescribedTask = ReturnType<TaskScheduler['describeTask']>;
 
@@ -338,21 +338,21 @@ const server = new Server(
 const tools: Tool[] = [
   {
     name: 'create_task',
-    description: 'Create a scheduled task ONLY when the user clearly wants something later. Classify the trigger (interval / cron / one-time), call get_current_time first, then build the payload and return a human-readable summary.',
+    description: 'Create a scheduled task ONLY after the user explicitly asks for a future or recurring action. Mandatory flow: (1) confirm the user really wants scheduling; (2) call get_current_time to anchor the timezone; (3) choose the trigger — interval (“every 30 minutes”), cron (“every weekday at 18:00”), or one-time date (“in 45 minutes”, “this Friday at 2 PM”); (4) capture the follow-up instruction in agent_prompt and return a rich summary.',
     inputSchema: {
       type: 'object',
       properties: {
         name: {
           type: 'string',
-          description: 'Task name/description (e.g. "Daily Status Check").'
+          description: 'Optional friendly name such as "Daily status check". Leave blank to let the server auto-generate one.'
         },
         trigger_type: {
           type: 'string',
           enum: ['interval', 'cron', 'date'],
-          description: 'Trigger kind: interval = recurring delay, cron = specific clock times, date = one-time or relative delay.'
+          description: 'Required. interval = recurring delay (“every 30 minutes”), cron = calendar-based (“every weekday at 18:00”), date = one-time/relative (“in 45 minutes”, “this Friday at 2 PM”).'
         },
         trigger_config: {
-          description: 'Trigger configuration. MUST match trigger_type. Examples: interval -> {"minutes": 15}; cron -> {"expression": "30 7 * * 1-5"}; date -> {"delay_minutes": 45}.',
+          description: 'Configuration matching trigger_type. Examples: interval → {"minutes": 15}; cron → {"expression": "30 7 * * 1-5"}; date → {"delay_minutes": 45} or {"run_date": "2025-12-24T09:00:00"}.',
           oneOf: [
             {
               title: 'Interval trigger',
@@ -433,7 +433,7 @@ const tools: Tool[] = [
         },
         agent_prompt: {
           type: 'string',
-          description: 'Plain-language instruction executed when the task fires. REMOVE the timing phrase and keep friendly prose (e.g. "Check for new videos and email me the AI briefing"). No code/tool syntax.',
+          description: 'Plain-language instruction executed when the task fires. Remove the timing phrase and keep friendly prose (e.g. "Check for new videos and email me the AI briefing"). No code/tool syntax.',
           examples: [
             '检查新视频，整理成AI早报并发送到liaofanyishi1@163.com',
             '获取今天的最新视频并生成摘要后发邮件给团队'
@@ -452,58 +452,86 @@ const tools: Tool[] = [
           description: 'DEPRECATED: Arguments to pass to the MCP tool (use agent_prompt instead)'
         }
       },
-      required: ['name', 'trigger_type', 'trigger_config']
+      required: ['trigger_type', 'trigger_config'],
+      examples: [
+        {
+          "name": "视频巡查",
+          "trigger_type": "interval",
+          "trigger_config": {"minutes": 30},
+          "agent_prompt": "检查有没有新视频并记录最新编号"
+        },
+        {
+          "name": "Daily backup",
+          "trigger_type": "cron",
+          "trigger_config": {"expression": "0 2 * * *"},
+          "agent_prompt": "Run the database backup and upload the archive"
+        },
+        {
+          "name": "Launch checklist reminder",
+          "trigger_type": "date",
+          "trigger_config": {"delay_minutes": 20},
+          "agent_prompt": "提醒我检查发布清单并通知团队"
+        }
+      ]
     }
   },
   {
     name: 'list_tasks',
-    description: 'List every task along with status, next run, last run, and stored instructions. Use after creating, updating, or auditing schedules.',
+    description: 'Return every stored task with its Markdown summary and raw detail payload. Use this right after creating/updating schedules or whenever the user wants a dashboard view. If the user says “show my paused jobs”, call this with status="paused".',
     inputSchema: {
       type: 'object',
       properties: {
         status: {
           type: 'string',
-          description: 'Optional status filter (scheduled, running, paused, completed, error). Leave blank to return everything.',
+          description: 'Optional filter: scheduled | running | paused | completed | error. Leave empty to return everything.'
         }
-      }
+      },
+      examples: [
+        {},
+        {"status": "paused"},
+        {"status": "error"}
+      ]
     }
   },
   {
     name: 'get_task',
-    description: 'Return the full details for a task ID, including Markdown summary, raw JSON, history, and localized timestamps.',
+    description: 'Fetch a single task by ID and return the same Markdown summary + raw detail structure used elsewhere. Invoke when the user wants to inspect status, next run, history, or agent instructions for one task.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: {
           type: 'string',
-          description: 'Task ID'
+          description: 'Task identifier reported in previous responses (e.g. "task-1760236021086-j6krg8f").'
         }
       },
-      required: ['task_id']
+      required: ['task_id'],
+      examples: [
+        {"task_id": "task-1760236021086-j6krg8f"}
+      ]
     }
   },
   {
     name: 'update_task',
-    description: 'Modify an existing task (name, trigger, agent_prompt, etc.). After updating, the response shows the recalculated next run.',
+    description: 'Modify an existing task (name, schedule, instructions). Flow: confirm the user really means to edit the schedule, call get_current_time when the timing changes, adjust trigger_type/trigger_config accordingly, and return the updated summary.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: {
           type: 'string',
-          description: 'Task ID'
+          description: 'Task identifier that was returned when the job was created or listed.'
         },
         name: {
           type: 'string',
-          description: 'New task name (optional)'
+          description: 'Optional new name. Leave out to keep the existing one.'
         },
         trigger_type: {
           type: 'string',
           enum: ['interval', 'cron', 'date'],
-          description: 'New trigger type (optional). If you change it, adjust trigger_config accordingly.'
+          description: 'Optional new trigger type. If you change this, you must also provide trigger_config in the matching shape.'
         },
         trigger_config: {
           type: 'object',
-          description: 'New trigger configuration (optional). Must align with trigger_type.'
+          description: 'Optional new configuration. Must align with trigger_type (see create_task for the same schema).'
         },
         mcp_server: {
           type: 'string',
@@ -519,33 +547,49 @@ const tools: Tool[] = [
         },
         agent_prompt: {
           type: 'string',
-          description: 'Updated agent prompt instruction (recommended). It should remain the natural-language task description **with scheduling wording removed**, without tool/function syntax.',
+          description: 'Updated natural-language instruction executed when the task fires. Keep it friendly prose without scheduling keywords or tool syntax.',
           examples: [
             '重新检查最新视频并只整理前3条，再发送邮件给运营',
             '生成AI早报后发到liaofanyishi1@163.com'
           ]
         }
       },
-      required: ['task_id']
+      required: ['task_id'],
+      examples: [
+        {
+          "task_id": "task-1760236021086-j6krg8f",
+          "trigger_type": "interval",
+          "trigger_config": {"minutes": 60},
+          "agent_prompt": "检查有没有新视频并发送摘要"
+        },
+        {
+          "task_id": "task-abc",
+          "trigger_type": "date",
+          "trigger_config": {"delay_minutes": 15}
+        }
+      ]
     }
   },
   {
     name: 'delete_task',
-    description: 'Delete a task permanently. The response includes the final snapshot (detail + summary) so you can confirm the removal.',
+    description: 'Permanently remove a task. Confirm the user really wants it gone. The server returns the last-known snapshot (summary + detail) for audit purposes.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: {
           type: 'string',
-          description: 'Task ID'
+          description: 'Task ID to delete'
         }
       },
-      required: ['task_id']
+      required: ['task_id'],
+      examples: [
+        {"task_id": "task-1760111762490-vfbh6tf"}
+      ]
     }
   },
   {
     name: 'clear_task_history',
-    description: 'Clear the stored run history for a task while keeping it scheduled; helpful before a new reporting period.',
+    description: 'Clear stored run history for a task but keep the schedule active. Use when the user wants to reset success/error logs for a new reporting window.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -554,63 +598,79 @@ const tools: Tool[] = [
           description: 'Task ID to clear history for'
         }
       },
-      required: ['task_id']
+      required: ['task_id'],
+      examples: [
+        {"task_id": "task-123"}
+      ]
     }
   },
   {
     name: 'pause_task',
-    description: 'Pause a task (disable future runs without deleting). Ideal for vacations or temporary shutdowns.',
+    description: 'Disable future runs without deleting the task. Ideal for vacations, maintenance windows, or temporary shutdowns.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: {
           type: 'string',
-          description: 'Task ID'
+          description: 'Task ID to pause'
         }
       },
-      required: ['task_id']
+      required: ['task_id'],
+      examples: [
+        {"task_id": "task-abc"}
+      ]
     }
   },
   {
     name: 'resume_task',
-    description: 'Resume a paused task and recompute its next run time.',
+    description: 'Re-enable a previously paused task and recompute the next run time.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: {
           type: 'string',
-          description: 'Task ID'
+          description: 'Task ID to resume'
         }
       },
-      required: ['task_id']
+      required: ['task_id'],
+      examples: [
+        {"task_id": "task-abc"}
+      ]
     }
   },
   {
     name: 'execute_task',
-    description: 'Manually run a task right now (test or catch-up). Response includes live output and the updated schedule.',
+    description: 'Manually run a task immediately (useful for testing or catching up). The response shows the live tool output and the refreshed schedule summary.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: {
           type: 'string',
-          description: 'Task ID'
+          description: 'Task ID to execute'
         }
       },
-      required: ['task_id']
+      required: ['task_id'],
+      examples: [
+        {"task_id": "task-123"}
+      ]
     }
   },
   {
     name: 'get_current_time',
-    description: 'Return the scheduler\'s current time (ISO + readable). Always call this before creating/updating schedules so you align with the user timezone.',
+    description: 'Return the scheduler\'s current time in the configured timezone (default Asia/Shanghai unless overridden). Always call this before creating or updating schedules so delay calculations stay accurate.',
     inputSchema: {
       type: 'object',
       properties: {
         format: {
           type: 'string',
           enum: ['iso', 'readable'],
-          description: 'Output format: "iso" for ISO 8601 (default), "readable" for human-readable format'
+          description: 'Optional. "iso" returns an ISO 8601 string in the configured timezone (default Asia/Shanghai); "readable" returns a localized human-readable string.'
         }
-      }
+      },
+      examples: [
+        {},
+        {"format": "readable"}
+      ]
     }
   }
 ];

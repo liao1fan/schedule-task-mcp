@@ -170,3 +170,8 @@ schedule-task-mcp/
 ---
 
 **准备就绪！请按照上述步骤完成发布！** 🚀
+
+
+
+npm run build
+npm publish --otp=
