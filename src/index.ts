@@ -25,6 +25,17 @@ const TIMEZONE = process.env.SCHEDULE_TASK_TIMEZONE || getSystemTimeZone() || 'A
 
 type DescribedTask = ReturnType<TaskScheduler['describeTask']>;
 
+function resolveTaskTitle(task: DescribedTask): string {
+  const prompt = typeof task.agent_prompt === 'string' ? task.agent_prompt.trim() : '';
+  if (prompt.length > 0) {
+    return truncateText(prompt, 80);
+  }
+  if (task.mcp_server && task.mcp_tool) {
+    return `${task.mcp_server}.${task.mcp_tool}`;
+  }
+  return task.id;
+}
+
 function truncateText(value: string, limit = 160): string {
   if (value.length <= limit) {
     return value;
@@ -76,6 +87,7 @@ function buildTaskSummary(task: DescribedTask, actionLabel: string): string {
   const lastRunLabel = formatTimestamp(task.last_run_local, task.last_run);
   const createdLabel = formatTimestamp(task.created_at_local, task.created_at, '未知');
   const updatedLabel = formatTimestamp(task.updated_at_local, task.updated_at, '未知');
+  const taskTitle = resolveTaskTitle(task);
 
   const historyCount = Array.isArray(task.history) ? task.history.length : 0;
   const latestHistory = historyCount > 0 ? task.history![0] : undefined;
@@ -87,8 +99,7 @@ function buildTaskSummary(task: DescribedTask, actionLabel: string): string {
   const runDateLocal = triggerConfigLocal.run_date_local ?? (triggerConfig.run_date ? formatTimestamp(undefined, triggerConfig.run_date) : undefined);
 
   const detailLines = [
-    `任务「${task.name}」已${actionLabel}：`,
-    `- **任务名称**：${task.name}`,
+    `任务「${taskTitle}」已${actionLabel}：`,
     `- **任务ID**：${task.id}`,
     `- **触发类型**：${describeTrigger(task)}`,
     task.trigger_type === 'cron' && triggerConfig.expression ? `- **Cron 表达式**：${triggerConfig.expression}` : null,
@@ -510,17 +521,13 @@ const tools: Tool[] = [
   },
   {
     name: 'update_task',
-    description: 'Modify an existing task (name, schedule, instructions). Flow: confirm the user really means to edit the schedule, call get_current_time when the timing changes, adjust trigger_type/trigger_config accordingly, and return the updated summary.',
+    description: 'Modify an existing task (schedule, instructions). Flow: confirm the user really means to edit the schedule, call get_current_time when the timing changes, adjust trigger_type/trigger_config accordingly, and return the updated summary.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: {
           type: 'string',
           description: 'Task identifier that was returned when the job was created or listed.'
-        },
-        name: {
-          type: 'string',
-          description: 'Optional new name. Leave out to keep the existing one.'
         },
         trigger_type: {
           type: 'string',
@@ -686,10 +693,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   try {
     switch (name) {
       case 'create_task': {
-        if (typeof args.name !== 'string' || args.name.trim().length === 0) {
-          throw new Error('Task name is required');
-        }
-
         const triggerType = args.trigger_type as SupportedTriggerType;
         if (!['interval', 'cron', 'date'].includes(triggerType)) {
           throw new Error('trigger_type must be one of interval, cron, date');
@@ -699,7 +702,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         const agentPrompt = extractAgentPrompt(args);
 
         const created = await scheduler.createTask({
-          name: args.name.trim(),
           trigger_type: triggerType,
           trigger_config: triggerConfig as Record<string, any>,
           mcp_server: args.mcp_server as string | undefined,
@@ -795,10 +797,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const updates: any = {};
-
-        if (typeof args.name === 'string' && args.name.trim().length > 0) {
-          updates.name = args.name.trim();
-        }
 
         const hasTriggerType = typeof args.trigger_type === 'string';
         const nextTriggerType = (hasTriggerType ? args.trigger_type : existingTask.trigger_type) as SupportedTriggerType;

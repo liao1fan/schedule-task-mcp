@@ -16,7 +16,6 @@ export interface TaskHistoryEntry {
 
 export interface TaskRecord {
   id: string;
-  name: string;
   trigger_type: 'interval' | 'cron' | 'date';
   trigger_config: Record<string, any>;
 
@@ -41,7 +40,6 @@ export interface TaskRecord {
 
 type TaskRow = {
   id: string;
-  name: string;
   trigger_type: string;
   trigger_config: string;
   mcp_server: string | null;
@@ -69,6 +67,7 @@ export class TaskStorage {
     this.ensureDirectory();
     this.db = new DatabaseSync(this.dbPath);
     this.initialiseSchema();
+    this.migrateLegacyNameColumn();
     this.migrateLegacyJson();
   }
 
@@ -77,13 +76,12 @@ export class TaskStorage {
     try {
       const insert = this.db.prepare(`
         INSERT INTO tasks (
-          id, name, trigger_type, trigger_config, mcp_server, mcp_tool, mcp_arguments,
+          id, trigger_type, trigger_config, mcp_server, mcp_tool, mcp_arguments,
           agent_prompt, enabled, status, created_at, updated_at, last_run, last_status,
           last_message, next_run
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
-          name = excluded.name,
           trigger_type = excluded.trigger_type,
           trigger_config = excluded.trigger_config,
           mcp_server = excluded.mcp_server,
@@ -102,7 +100,6 @@ export class TaskStorage {
 
       insert.run(
         task.id,
-        task.name,
         task.trigger_type,
         JSON.stringify(task.trigger_config ?? {}),
         task.mcp_server ?? null,
@@ -238,7 +235,6 @@ export class TaskStorage {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
         trigger_type TEXT NOT NULL,
         trigger_config TEXT NOT NULL,
         mcp_server TEXT,
@@ -266,6 +262,65 @@ export class TaskStorage {
         FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
       );
     `);
+  }
+
+  private migrateLegacyNameColumn(): void {
+    let columns: Array<{ name: string }> = [];
+    try {
+      columns = this.db.prepare('PRAGMA table_info(tasks)').all<{ name: string }>();
+    } catch (error) {
+      console.error('[schedule-task-mcp] Failed to inspect tasks table schema:', error);
+      return;
+    }
+
+    const hasNameColumn = columns.some((column) => column.name === 'name');
+    if (!hasNameColumn) {
+      return;
+    }
+
+    this.db.exec('BEGIN');
+    try {
+      this.db.exec(`
+        CREATE TABLE tasks_new (
+          id TEXT PRIMARY KEY,
+          trigger_type TEXT NOT NULL,
+          trigger_config TEXT NOT NULL,
+          mcp_server TEXT,
+          mcp_tool TEXT,
+          mcp_arguments TEXT,
+          agent_prompt TEXT,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          status TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          last_run TEXT,
+          last_status TEXT,
+          last_message TEXT,
+          next_run TEXT
+        );
+      `);
+
+      this.db.exec(`
+        INSERT INTO tasks_new (
+          id, trigger_type, trigger_config, mcp_server, mcp_tool, mcp_arguments,
+          agent_prompt, enabled, status, created_at, updated_at, last_run,
+          last_status, last_message, next_run
+        )
+        SELECT
+          id, trigger_type, trigger_config, mcp_server, mcp_tool, mcp_arguments,
+          agent_prompt, enabled, status, created_at, updated_at, last_run,
+          last_status, last_message, next_run
+        FROM tasks;
+      `);
+
+      this.db.exec('DROP TABLE tasks;');
+      this.db.exec('ALTER TABLE tasks_new RENAME TO tasks;');
+
+      this.db.exec('COMMIT');
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   private migrateLegacyJson(): void {
@@ -299,7 +354,6 @@ export class TaskStorage {
           for (const record of data) {
             const task: TaskRecord = {
               id: record.id,
-              name: record.name,
               trigger_type: record.trigger_type,
               trigger_config: record.trigger_config ?? {},
               mcp_server: record.mcp_server ?? undefined,
@@ -359,7 +413,6 @@ export class TaskStorage {
   private mapRowToTask(row: TaskRow, history: TaskHistoryEntry[]): TaskRecord {
     return {
       id: row.id,
-      name: row.name,
       trigger_type: row.trigger_type as TaskRecord['trigger_type'],
       trigger_config: this.safeParse(row.trigger_config, {}),
       mcp_server: row.mcp_server ?? undefined,

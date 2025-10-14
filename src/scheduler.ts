@@ -239,7 +239,6 @@ export class TaskScheduler {
    * Create a new task
    */
   async createTask(params: {
-    name: string;
     trigger_type: 'interval' | 'cron' | 'date';
     trigger_config: Record<string, any>;
     mcp_server?: string;
@@ -250,7 +249,6 @@ export class TaskScheduler {
     const now = new Date().toISOString();
     const task: TaskRecord = {
       id: this.generateId(),
-      name: params.name,
       trigger_type: params.trigger_type,
       trigger_config: params.trigger_config,
       mcp_server: params.mcp_server,
@@ -307,7 +305,7 @@ export class TaskScheduler {
    */
   async updateTask(
     id: string,
-    updates: Partial<Pick<TaskRecord, 'name' | 'trigger_type' | 'trigger_config' | 'mcp_server' | 'mcp_tool' | 'mcp_arguments' | 'agent_prompt' | 'enabled'>>
+    updates: Partial<Pick<TaskRecord, 'trigger_type' | 'trigger_config' | 'mcp_server' | 'mcp_tool' | 'mcp_arguments' | 'agent_prompt' | 'enabled'>>
   ): Promise<TaskRecord> {
     const task = this.storage.get(id);
     if (!task) {
@@ -547,7 +545,7 @@ export class TaskScheduler {
 
       } else {
         // No action configured
-        message = `Task executed: ${task.name} (no action configured)`;
+        message = `Task executed: ${task.id} (no action configured)`;
         console.error(`[${task.id}] ${message}`);
       }
 
