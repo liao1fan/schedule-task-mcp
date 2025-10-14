@@ -1,6 +1,6 @@
 {
   "name": "schedule-task-mcp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "MCP server for scheduled task management and execution with support for interval, cron, and date-based triggers",
   "type": "module",
   "main": "dist/index.js",
