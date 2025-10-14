@@ -342,10 +342,6 @@ const tools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        name: {
-          type: 'string',
-          description: 'Optional friendly name such as "Daily status check". Leave blank to let the server auto-generate one.'
-        },
         trigger_type: {
           type: 'string',
           enum: ['interval', 'cron', 'date'],
@@ -433,11 +429,7 @@ const tools: Tool[] = [
         },
         agent_prompt: {
           type: 'string',
-          description: 'Plain-language instruction executed when the task fires. Remove the timing phrase and keep friendly prose (e.g. "Check for new videos and email me the AI briefing"). No code/tool syntax.',
-          examples: [
-            '检查新视频，整理成AI早报并发送到liaofanyishi1@163.com',
-            '获取今天的最新视频并生成摘要后发邮件给团队'
-          ]
+          description: 'The task content extracted from the user’s original input, excluding any time expressions. Preserve the user’s original wording and phrasing exactly as spoken or typed. Do not summarize, rephrase, restructure, or otherwise alter the content.',
         },
         mcp_server: {
           type: 'string',
@@ -455,22 +447,28 @@ const tools: Tool[] = [
       required: ['trigger_type', 'trigger_config'],
       examples: [
         {
-          "name": "视频巡查",
-          "trigger_type": "interval",
-          "trigger_config": {"minutes": 30},
-          "agent_prompt": "检查有没有新视频并记录最新编号"
+          "user_input": "每隔30分钟，检查新视频",
+          "arguments": {
+            "trigger_type": "interval",
+            "trigger_config": { "minutes": 30 },
+            "agent_prompt": "检查新视频"
+          }
         },
         {
-          "name": "Daily backup",
-          "trigger_type": "cron",
-          "trigger_config": {"expression": "0 2 * * *"},
-          "agent_prompt": "Run the database backup and upload the archive"
+          "user_input": "每天凌晨2点，Run the database backup and upload the archive",
+          "arguments": {
+            "trigger_type": "cron",
+            "trigger_config": { "expression": "0 2 * * *" },
+            "agent_prompt": "Run the database backup and upload the archive"
+          }
         },
         {
-          "name": "Launch checklist reminder",
-          "trigger_type": "date",
-          "trigger_config": {"delay_minutes": 20},
-          "agent_prompt": "提醒我检查发布清单并通知团队"
+          "user_input": "20分钟后，提醒我检查发布清单并通知团队",
+          "arguments": {
+            "trigger_type": "date",
+            "trigger_config": { "delay_minutes": 20 },
+            "agent_prompt": "提醒我检查发布清单并通知团队"
+          }
         }
       ]
     }
