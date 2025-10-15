@@ -440,7 +440,7 @@ const tools: Tool[] = [
         },
         agent_prompt: {
           type: 'string',
-          description: 'The task content extracted from the user’s original input, excluding any time expressions. Preserve the user’s original wording and phrasing exactly as spoken or typed. Do not summarize, rephrase, restructure, or otherwise alter the content.',
+          description: 'CRITICAL: Extract the task description from user input, removing ONLY time expressions. You MUST preserve the user\'s exact original wording verbatim. DO NOT add ANY formatting (no markdown links like mailto:, no brackets, no special syntax), DO NOT translate, summarize, rephrase, restructure, add/remove punctuation, or modify in ANY way. Copy the user\'s words character-by-character. Example: user says "check videos and send to test@qq.com" → agent_prompt MUST be "check videos and send to test@qq.com", NOT "check videos and send to [test@qq.com](mailto:test@qq.com)".',
         },
         mcp_server: {
           type: 'string',
