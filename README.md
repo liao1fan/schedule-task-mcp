@@ -162,7 +162,52 @@ If the supplied timestamp is in the past, the server automatically adjusts it (u
 
 ## 🔌 Integration Notes
 
-You can still attach `mcp_server`, `mcp_tool`, and `mcp_arguments` to a task for future MCP-to-MCP orchestration. At present the scheduler doesn’t call other servers directly; instead, prefer `agent_prompt` so the agent can coordinate follow-up actions through sampling.
+You can still attach `mcp_server`, `mcp_tool`, and `mcp_arguments` to a task for future MCP-to-MCP orchestration. At present the scheduler doesn't call other servers directly; instead, prefer `agent_prompt` so the agent can coordinate follow-up actions through sampling.
+
+## 🔄 MCP Sampling Support
+
+Schedule Task MCP supports **MCP Sampling**, which allows the server to call back into the MCP client when a scheduled task triggers. This enables powerful automation workflows where your AI agent can be automatically invoked to execute tasks.
+
+### How It Works
+
+When you create a task with an `agent_prompt`, the scheduler will:
+
+1. **Trigger at scheduled time** – The task runs based on its trigger configuration (interval, cron, or date)
+2. **Send sampling request** – The server sends a `sampling/createMessage` request to the MCP client
+3. **Execute agent logic** – Your client's `sampling_callback` receives the `agent_prompt` and executes the task
+4. **Record results** – The execution result is recorded in the task history
+
+### Example Workflow
+
+```
+User: "Every day at 9am, check for new videos and send me a summary"
+  ↓
+Agent creates task with:
+  - trigger: cron "0 9 * * *"
+  - agent_prompt: "check for new videos and send me a summary"
+  ↓
+Next day at 9am:
+  - schedule-task-mcp sends sampling request
+  - Client receives agent_prompt
+  - Agent executes: checks videos → generates summary → sends email
+  - Result recorded in task history
+```
+
+### Creating a Sampling-Enabled Client
+
+To use MCP Sampling with schedule-task-mcp, you need to implement a `sampling_callback` in your MCP client. We provide two approaches:
+
+1. **Using MCP Official API** (Python) – Simple, direct implementation for straightforward tasks
+2. **Using OpenAI Agents SDK** (Python) – Powerful agent-based implementation with automatic tool calling
+
+**📖 For detailed implementation guides, code examples, and best practices, see [MCP_SAMPLING_GUIDE.md](./MCP_SAMPLING_GUIDE.md)**
+
+The guide includes:
+- Complete code examples for both approaches
+- Step-by-step setup instructions
+- Comparison of the two methods
+- Troubleshooting tips
+- Reference to working implementations
 
 ## 🛣️ Roadmap
 
