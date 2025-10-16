@@ -688,7 +688,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 // Tool call handler
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name } = request.params;
-  const args = (request.params.arguments ?? {}) as Record<string, any>;
+  let args = (request.params.arguments ?? {}) as Record<string, any>;
+
+  // Handle nested arguments (OpenAI Agents SDK wraps params in 'arguments' field)
+  if (args.arguments && typeof args.arguments === 'object') {
+    args = args.arguments as Record<string, any>;
+  }
 
   try {
     switch (name) {
