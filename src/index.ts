@@ -293,6 +293,36 @@ function validateDateConfig(rawConfig: Record<string, any>): DateTriggerConfig {
   return { run_date: runDate.toISOString() };
 }
 
+function buildTriggerConfigFromFlatArgs(triggerType: SupportedTriggerType, args: Record<string, any>): Record<string, any> {
+  if (triggerType === 'interval') {
+    const config: Record<string, any> = {};
+    if (typeof args.interval_seconds === 'number') config.seconds = args.interval_seconds;
+    if (typeof args.interval_minutes === 'number') config.minutes = args.interval_minutes;
+    if (typeof args.interval_hours === 'number') config.hours = args.interval_hours;
+    if (typeof args.interval_days === 'number') config.days = args.interval_days;
+    return config;
+  }
+
+  if (triggerType === 'cron') {
+    if (typeof args.cron_expression === 'string') {
+      return { expression: args.cron_expression };
+    }
+    return {};
+  }
+
+  if (triggerType === 'date') {
+    const config: Record<string, any> = {};
+    if (typeof args.run_date === 'string') config.run_date = args.run_date;
+    if (typeof args.delay_seconds === 'number') config.delay_seconds = args.delay_seconds;
+    if (typeof args.delay_minutes === 'number') config.delay_minutes = args.delay_minutes;
+    if (typeof args.delay_hours === 'number') config.delay_hours = args.delay_hours;
+    if (typeof args.delay_days === 'number') config.delay_days = args.delay_days;
+    return config;
+  }
+
+  return {};
+}
+
 function validateTriggerConfig(triggerType: SupportedTriggerType, rawConfig: any): SupportedTriggerConfig {
   if (!rawConfig || typeof rawConfig !== 'object') {
     throw new Error('trigger_config must be an object');
@@ -321,8 +351,14 @@ function sanitizeAgentPrompt(value: any): string | undefined {
 }
 
 function extractAgentPrompt(args: Record<string, any> | undefined): string | undefined {
-  const prompt = sanitizeAgentPrompt(args?.agent_prompt);
+  // Try new field name first
+  const instruction = sanitizeAgentPrompt(args?.instruction);
+  if (instruction) {
+    return instruction;
+  }
 
+  // Fall back to legacy field names
+  const prompt = sanitizeAgentPrompt(args?.agent_prompt);
   if (prompt) {
     return prompt;
   }
@@ -349,139 +385,82 @@ const server = new Server(
 const tools: Tool[] = [
   {
     name: 'create_task',
-    description: 'Create a scheduled task ONLY after the user explicitly asks for a future or recurring action. Mandatory flow: (1) confirm the user really wants scheduling; (2) call get_current_time to anchor the timezone; (3) choose the trigger — interval (“every 30 minutes”), cron (“every weekday at 18:00”), or one-time date (“in 45 minutes”, “this Friday at 2 PM”); (4) capture the follow-up instruction in agent_prompt and return a rich summary.',
+    description: 'Create a scheduled task with interval, cron, or one-time date trigger',
     inputSchema: {
       type: 'object',
       properties: {
+        instruction: {
+          type: 'string',
+          description: 'Task to execute when triggered. Extract only the action, removing time expressions. Example: "每天9点检查新视频" → "检查新视频"'
+        },
         trigger_type: {
           type: 'string',
           enum: ['interval', 'cron', 'date'],
-          description: 'Required. interval = recurring delay (“every 30 minutes”), cron = calendar-based (“every weekday at 18:00”), date = one-time/relative (“in 45 minutes”, “this Friday at 2 PM”).'
+          description: 'Schedule type: interval (recurring delay), cron (specific times), or date (one-time)'
         },
-        trigger_config: {
-          description: 'Configuration matching trigger_type. Examples: interval → {"minutes": 15}; cron → {"expression": "30 7 * * 1-5"}; date → {"delay_minutes": 45} or {"run_date": "2025-12-24T09:00:00"}.',
-          oneOf: [
-            {
-              title: 'Interval trigger',
-              type: 'object',
-              properties: {
-                seconds: {
-                  type: 'number',
-                  minimum: 0.001,
-                  description: 'Number of seconds between runs'
-                },
-                minutes: {
-                  type: 'number',
-                  minimum: 0.001,
-                  description: 'Number of minutes between runs'
-                },
-                hours: {
-                  type: 'number',
-                  minimum: 0.001,
-                  description: 'Number of hours between runs'
-                },
-                days: {
-                  type: 'number',
-                  minimum: 0.001,
-                  description: 'Number of days between runs'
-                }
-              },
-              additionalProperties: false,
-              minProperties: 1,
-              description: 'Provide any combination of seconds/minutes/hours/days. Must sum to a positive duration.'
-            },
-            {
-              title: 'Cron trigger',
-              type: 'object',
-              properties: {
-                expression: {
-                  type: 'string',
-                  description: 'Cron expression (e.g. "0 9 * * *" for 9am daily)'
-                }
-              },
-              required: ['expression'],
-              additionalProperties: false
-            },
-            {
-              title: 'Date trigger',
-              type: 'object',
-              properties: {
-                run_date: {
-                  type: 'string',
-                  format: 'date-time',
-                  description: 'ISO 8601 timestamp for one-time execution. Must be in the future.'
-                },
-                delay_seconds: {
-                  type: 'number',
-                  minimum: 0,
-                  description: 'Delay in seconds before first run (alternative to run_date)'
-                },
-                delay_minutes: {
-                  type: 'number',
-                  minimum: 0,
-                  description: 'Delay in minutes before first run (alternative to run_date)'
-                },
-                delay_hours: {
-                  type: 'number',
-                  minimum: 0,
-                  description: 'Delay in hours before first run (alternative to run_date)'
-                },
-                delay_days: {
-                  type: 'number',
-                  minimum: 0,
-                  description: 'Delay in days before first run (alternative to run_date)'
-                }
-              },
-              additionalProperties: false,
-              minProperties: 1,
-              description: 'Provide either run_date or delay fields (delay_seconds/minutes/hours/days).'
-            }
-          ]
-        },
-        agent_prompt: {
+        cron_expression: {
           type: 'string',
-          description: 'CRITICAL: Extract the task description from user input, removing ONLY time expressions. You MUST preserve the user\'s exact original wording verbatim. DO NOT add ANY formatting (no markdown links like mailto:, no brackets, no special syntax), DO NOT translate, summarize, rephrase, restructure, add/remove punctuation, or modify in ANY way. Copy the user\'s words character-by-character. Example: user says "check videos and send to test@qq.com" → agent_prompt MUST be "check videos and send to test@qq.com", NOT "check videos and send to [test@qq.com](mailto:test@qq.com)".',
+          description: 'Cron expression (required for trigger_type=cron). Example: "0 9 * * *" for daily at 9am'
+        },
+        interval_seconds: {
+          type: 'number',
+          minimum: 0.001,
+          description: 'Interval in seconds (for trigger_type=interval)'
+        },
+        interval_minutes: {
+          type: 'number',
+          minimum: 0.001,
+          description: 'Interval in minutes (for trigger_type=interval)'
+        },
+        interval_hours: {
+          type: 'number',
+          minimum: 0.001,
+          description: 'Interval in hours (for trigger_type=interval)'
+        },
+        interval_days: {
+          type: 'number',
+          minimum: 0.001,
+          description: 'Interval in days (for trigger_type=interval)'
+        },
+        run_date: {
+          type: 'string',
+          format: 'date-time',
+          description: 'ISO 8601 timestamp for one-time execution (for trigger_type=date)'
+        },
+        delay_seconds: {
+          type: 'number',
+          minimum: 0,
+          description: 'Delay in seconds (for trigger_type=date)'
+        },
+        delay_minutes: {
+          type: 'number',
+          minimum: 0,
+          description: 'Delay in minutes (for trigger_type=date)'
+        },
+        delay_hours: {
+          type: 'number',
+          minimum: 0,
+          description: 'Delay in hours (for trigger_type=date)'
+        },
+        delay_days: {
+          type: 'number',
+          minimum: 0,
+          description: 'Delay in days (for trigger_type=date)'
         },
         mcp_server: {
           type: 'string',
-          description: 'DEPRECATED: MCP server name to call (use agent_prompt instead)'
+          description: 'Legacy: MCP server name to call'
         },
         mcp_tool: {
           type: 'string',
-          description: 'DEPRECATED: MCP tool name to call (use agent_prompt instead)'
+          description: 'Legacy: MCP tool name to call'
         },
         mcp_arguments: {
           type: 'object',
-          description: 'DEPRECATED: Arguments to pass to the MCP tool (use agent_prompt instead)'
+          description: 'Legacy: Arguments to pass to MCP tool'
         }
       },
-      required: ['trigger_type', 'trigger_config'],
-      examples: [
-        {
-          "user_input": "每隔30分钟，检查新视频",
-          "arguments": {
-            "trigger_type": "interval",
-            "trigger_config": { "minutes": 30 },
-            "agent_prompt": "检查新视频"
-          }
-        },
-        {
-          "user_input": "每天凌晨2点，Run the database backup and upload the archive",
-          "arguments": {
-            "trigger_type": "cron",
-            "trigger_config": { "expression": "0 2 * * *" },
-            "agent_prompt": "Run the database backup and upload the archive"
-          }
-        },
-        {
-          "user_input": "20分钟后，提醒我检查发布清单并通知团队",
-          "arguments": {
-            "trigger_type": "date",
-            "trigger_config": { "delay_minutes": 20 },
-            "agent_prompt": "提醒我检查发布清单并通知团队"
-          }
-        }
-      ]
+      required: ['instruction', 'trigger_type']
     }
   },
   {
@@ -703,7 +682,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           throw new Error('trigger_type must be one of interval, cron, date');
         }
 
-        const triggerConfig = validateTriggerConfig(triggerType, args.trigger_config);
+        // Build trigger_config from flat args (new format) or use provided trigger_config (legacy format)
+        const rawConfig = args.trigger_config || buildTriggerConfigFromFlatArgs(triggerType, args);
+        const triggerConfig = validateTriggerConfig(triggerType, rawConfig);
         const agentPrompt = extractAgentPrompt(args);
 
         const created = await scheduler.createTask({
@@ -814,16 +795,27 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         }
 
         const hasTriggerConfig = Object.prototype.hasOwnProperty.call(args, 'trigger_config');
+        const hasFlatConfig = args.cron_expression || args.interval_seconds || args.interval_minutes ||
+                             args.interval_hours || args.interval_days || args.run_date ||
+                             args.delay_seconds || args.delay_minutes || args.delay_hours || args.delay_days;
+
         if (hasTriggerConfig) {
           updates.trigger_config = validateTriggerConfig(nextTriggerType, args.trigger_config) as Record<string, any>;
+        } else if (hasFlatConfig) {
+          const rawConfig = buildTriggerConfigFromFlatArgs(nextTriggerType, args);
+          updates.trigger_config = validateTriggerConfig(nextTriggerType, rawConfig) as Record<string, any>;
         } else if (hasTriggerType) {
-          throw new Error('Updating trigger_type requires providing trigger_config');
+          throw new Error('Updating trigger_type requires providing trigger configuration');
         }
 
         if (typeof args.mcp_server === 'string') updates.mcp_server = args.mcp_server;
         if (typeof args.mcp_tool === 'string') updates.mcp_tool = args.mcp_tool;
         if (Object.prototype.hasOwnProperty.call(args, 'mcp_arguments')) updates.mcp_arguments = args.mcp_arguments;
-        if (Object.prototype.hasOwnProperty.call(args, 'agent_prompt')) {
+
+        // Support both new 'instruction' and legacy 'agent_prompt'
+        if (Object.prototype.hasOwnProperty.call(args, 'instruction')) {
+          updates.agent_prompt = sanitizeAgentPrompt(args.instruction);
+        } else if (Object.prototype.hasOwnProperty.call(args, 'agent_prompt')) {
           updates.agent_prompt = sanitizeAgentPrompt(args.agent_prompt);
         }
 
